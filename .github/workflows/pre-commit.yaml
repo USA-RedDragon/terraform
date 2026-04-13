@@ -45,7 +45,7 @@ jobs:
       - run: pre-commit run --show-diff-on-failure --color=always --all-files || true
       - uses: stefanzweifel/git-auto-commit-action@04702edda442b2e678b25b537cec683a1493fcb9 # v7.1.0
         with:
-          commit_message: "chore: Apply clippy fixes"
+          commit_message: "chore: Apply pre-commit changes"
           commit_user_name: usa-reddragon-auto-commit[bot]
           commit_user_email: 234130638+github-actions[bot]@users.noreply.github.com
           commit_author: "usa-reddragon-auto-commit[bot] <234130638+github-actions[bot]@users.noreply.github.com>"
