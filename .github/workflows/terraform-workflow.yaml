@@ -47,7 +47,7 @@ env:
 jobs:
   matrix:
     name: Generate job matrices
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     if: inputs.working-directory != '.'
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -60,7 +60,7 @@ jobs:
 
   terraform:
     name: Terraform
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     if: inputs.working-directory == '.'
     steps:
       - name: Checkout
@@ -234,7 +234,7 @@ jobs:
 
   terraform-matrix:
     name: ${{ matrix.match }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: [matrix]
     strategy:
       fail-fast: false
@@ -420,7 +420,7 @@ jobs:
   terraform-results:
     if: always()
     needs: [ terraform, terraform-matrix ]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - run: |
           result="${{ needs.terraform-matrix.result }}"
