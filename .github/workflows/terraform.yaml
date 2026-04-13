@@ -13,7 +13,7 @@ concurrency:
 jobs:
   terraform:
     name: Terraform
-    uses: ./terraform-workflow.yaml
+    uses: ./.github/workflows/terraform-workflow.yaml
     permissions:
       id-token: write      # Required for AWS auth
       contents: read       # Required for actions/checkout
