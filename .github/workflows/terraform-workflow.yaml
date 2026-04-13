@@ -54,7 +54,7 @@ jobs:
     steps:
       - name: Generate matrix
         id: matrix
-        uses: hellofresh/action-changed-files@f6db62a551af02bb4bbc88ce6536bf40aa537e8f # v3
+        uses: hellofresh/action-changed-files@f6db62a551af02bb4bbc88ce6536bf40aa537e8f # v3.0.1
         with:
             pattern: ${{ inputs.working-directory }}/(?P<match>[^/]+)
 
