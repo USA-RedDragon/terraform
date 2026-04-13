@@ -2,5 +2,8 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "local>USA-RedDragon/renovate-configs"
+  ],
+  "gitIgnoredAuthors": [
+    "234130638+github-actions[bot]@users.noreply.github.com"
   ]
 }
