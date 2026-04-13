@@ -1,0 +1,439 @@
+name: Terraform
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        type: boolean
+        required: false
+        default: true
+        description: 'Whether to plan the Terraform changes'
+      apply:
+        type: boolean
+        required: false
+        default: false
+        description: 'Whether to apply the Terraform changes'
+      destroy:
+        type: boolean
+        default: false
+        required: false
+        description: 'Whether to destroy the Terraform resources'
+      working-directory:
+        type: string
+        required: false
+        default: '.'
+        description: 'The working directory to run Terraform commands in. The module name will be appended to this path'
+      aws-auth:
+        type: boolean
+        required: false
+        default: false
+        description: 'Whether to authenticate to AWS'
+      aws-region:
+        type: string
+        required: false
+        description: 'The AWS region'
+    secrets:
+      aws-role-to-assume:
+        required: false
+        description: 'The AWS role to assume'
+      aws-role-session-name:
+        required: false
+        description: 'The AWS role session name'
+
+env:
+  # Disable Terraform telemetry
+  CHECKPOINT_DISABLE: "true"
+
+jobs:
+  matrix:
+    name: Generate job matrices
+    runs-on: ubuntu-22.04
+    if: inputs.working-directory != '.'
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Generate matrix
+        id: matrix
+        uses: hellofresh/action-changed-files@v3
+        with:
+            pattern: ${{ inputs.working-directory }}/(?P<match>[^/]+)
+
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-22.04
+    if: inputs.working-directory == '.'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform fmt
+        id: fmt
+        run: terraform fmt -check
+        continue-on-error: true
+
+      - name: Authenticate to AWS
+        if: inputs.aws-auth
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.aws-role-to-assume }}
+          role-session-name: ${{ secrets.aws-role-session-name }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Terraform Init
+        id: init
+        run: terraform init -no-color
+        continue-on-error: true
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+        continue-on-error: true
+
+      - name: Terraform Plan
+        id: plan
+        if: ( inputs.plan || inputs.apply )
+        run: |
+          set +e
+          terraform plan -no-color -out=plan.out -detailed-exitcode
+          EXITCODE=$?
+          if [[ $EXITCODE -eq 2 ]]; then
+            echo "Plan succeeded with a diff"
+            echo "diff=true" >> $GITHUB_OUTPUT
+            exit 0
+          elif [[ $EXITCODE -eq 0 ]]; then
+            echo "Plan succeeded with no diff"
+            echo "diff=false" >> $GITHUB_OUTPUT
+            exit 0
+          else
+            echo "Plan failed"
+            echo "diff=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+        continue-on-error: true
+
+      - name: Terraform Apply
+        id: apply
+        if: inputs.apply
+        run: terraform apply -auto-approve -no-color plan.out
+
+      - name: Terraform Destroy
+        id: destroy
+        if: inputs.destroy
+        run: terraform destroy -auto-approve -no-color
+
+      - uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        id: github-script
+        env:
+          FMT: "${{ steps.fmt.outputs.stdout }}"
+          INIT: "${{ steps.init.outputs.stderr }}"
+          VALIDATE: "${{ steps.validate.outputs.stderr }}"
+          PLAN_OUT: "${{ steps.plan.outputs.stdout }}"
+          PLAN_ERR: "${{ steps.plan.outputs.stderr }}"
+        with:
+          result-encoding: string
+          script: |
+            let comment = `## Terraform Checks\n\n`;
+
+            if ("${{ steps.fmt.outcome }}" == "success") {
+              comment += `\n#### ✅ Terraform Format and Style Passed`;
+            } else {
+              // Split the output into an array of strings
+              let fileList = process.env.FMT.split("\n");
+              // Remove any empty lines from the array
+              fileList = fileList.filter((item) => item.trim() !== "");
+              fileList = fileList.map((item) => `<li><code>${item}</code></li>\n`);
+              filesString = fileList.join("\n");
+              comment += `\n#### ❌ Terraform Format and Style Failed
+            <details>
+            <summary>Failed Files</summary>
+            <ul>
+              ${filesString}
+            </ul>
+            </details>\n`;
+            }
+
+            if ("${{ steps.init.outcome }}" == "success") {
+              comment += `\n#### ✅ Terraform Initialization Passed`;
+            } else {
+              comment += `\n#### ❌ Terraform Initialization Failed
+            <details>
+            <summary><code>terraform init</code> output</summary>
+            <pre>\n
+            ${process.env.INIT}
+            </pre>\n
+            </details>\n`;
+            }
+
+            if ("${{ steps.validate.outcome }}" == "success") {
+              comment += `\n#### ✅ Terraform Validation Passed`;
+            } else {
+              comment += `\n#### ❌ Terraform Validation Failed
+            <details>
+            <summary><code>terraform validate</code> output</summary>
+            <pre>\n
+            ${process.env.VALIDATE}
+            </pre>\n
+            </details>\n`;
+            }
+
+            if ("${{ inputs.plan }}" == "true") {
+              if ("${{ steps.plan.outputs.diff }}" == "true") {
+                comment += `\n#### 📜 Terraform Plan Has Changes\n`;
+              } else if ("${{ steps.plan.outcome }}" == "success") {
+                comment += `\n#### ✅ Terraform Plan Has No Changes\n`;
+              }
+
+              if ("${{ steps.plan.outcome }}" == "success") {
+                comment += `\n#### ✅ Terraform Plan Passed`;
+              } else {
+                comment += `\n#### ❌ Terraform Plan Failed`;
+              }
+              comment += `
+              <details>
+              <summary><code>terraform plan</code> output</summary>\n
+              \`\`\`hcl\n`;
+
+              if ("${{ steps.plan.outcome }}" == "success") {
+                comment += `${process.env.PLAN_OUT}`;
+              } else {
+                comment += `${process.env.PLAN_ERR}`;
+              }
+              
+              comment += `
+              \`\`\`\n
+              </details>`;
+            }
+
+            return comment;
+
+      - name: Find Comment
+        if: github.event_name == 'pull_request'
+        uses: peter-evans/find-comment@v3
+        id: fc
+        with:
+          comment-author: github-actions[bot]
+          issue-number: ${{ github.event.pull_request.number }}
+          body-includes: '## Terraform Checks'
+
+      - name: Create comment
+        if: github.event_name == 'pull_request'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.fc.outputs.comment-id }}
+          edit-mode: replace
+          issue-number: ${{ github.event.pull_request.number }}
+          body: ${{ steps.github-script.outputs.result }}
+
+      - name: Error if failed
+        if: steps.fmt.outcome == 'failure' || steps.validate.outcome == 'failure' || steps.init.outcome == 'failure' || steps.plan.outcome == 'failure' || steps.apply.outcome == 'failure' || steps.destroy.outcome == 'failure'
+        run: exit 1
+
+  terraform-matrix:
+    name: ${{ matrix.match }}
+    runs-on: ubuntu-22.04
+    needs: [matrix]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
+    # skip if the matrix is empty
+    if: fromJson(needs.matrix.outputs.matrix).include[0] && inputs.working-directory != '.'
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}/${{ matrix.match }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform fmt
+        id: fmt
+        run: terraform fmt -check
+        continue-on-error: true
+
+      - name: Authenticate to AWS
+        if: inputs.aws-auth
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.aws-role-to-assume }}
+          role-session-name: ${{ secrets.aws-role-session-name }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Terraform Init
+        id: init
+        run: terraform init -no-color
+        continue-on-error: true
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+        continue-on-error: true
+
+      - name: Terraform Plan
+        id: plan
+        if: ( inputs.plan || inputs.apply )
+        run: |
+          set +e
+          terraform plan -no-color -out=plan.out -detailed-exitcode
+          EXITCODE=$?
+          if [[ $EXITCODE -eq 2 ]]; then
+            echo "Plan succeeded with a diff"
+            echo "diff=true" >> $GITHUB_OUTPUT
+            exit 0
+          elif [[ $EXITCODE -eq 0 ]]; then
+            echo "Plan succeeded with no diff"
+            echo "diff=false" >> $GITHUB_OUTPUT
+            exit 0
+          else
+            echo "Plan failed"
+            echo "diff=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+        continue-on-error: true
+
+      - name: Terraform Apply
+        id: apply
+        if: inputs.apply
+        run: terraform apply -auto-approve -no-color plan.out
+
+      - name: Terraform Destroy
+        id: destroy
+        if: inputs.destroy
+        run: terraform destroy -auto-approve -no-color
+
+      - uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        id: github-script
+        env:
+          FMT: "${{ steps.fmt.outputs.stdout }}"
+          INIT: "${{ steps.init.outputs.stderr }}"
+          VALIDATE: "${{ steps.validate.outputs.stderr }}"
+          PLAN_OUT: "${{ steps.plan.outputs.stdout }}"
+          PLAN_ERR: "${{ steps.plan.outputs.stderr }}"
+        with:
+          result-encoding: string
+          script: |
+            let comment = `## \`${{ matrix.match }}\` Terraform Checks\n\n`;
+
+            if ("${{ steps.fmt.outcome }}" == "success") {
+              comment += `\n#### ✅ Terraform Format and Style Passed`;
+            } else {
+              // Split the output into an array of strings
+              let fileList = process.env.FMT.split("\n");
+              // Remove any empty lines from the array
+              fileList = fileList.filter((item) => item.trim() !== "");
+              fileList = fileList.map((item) => `<li><code>${item}</code></li>\n`);
+              filesString = fileList.join("\n");
+              comment += `\n#### ❌ Terraform Format and Style Failed
+            <details>
+            <summary>Failed Files</summary>
+            <ul>
+              ${filesString}
+            </ul>
+            </details>\n`;
+            }
+
+            if ("${{ steps.init.outcome }}" == "success") {
+              comment += `\n#### ✅ Terraform Initialization Passed`;
+            } else {
+              comment += `\n#### ❌ Terraform Initialization Failed
+            <details>
+            <summary><code>terraform init</code> output</summary>
+            <pre>\n
+            ${process.env.INIT}
+            </pre>\n
+            </details>\n`;
+            }
+
+            if ("${{ steps.validate.outcome }}" == "success") {
+              comment += `\n#### ✅ Terraform Validation Passed`;
+            } else {
+              comment += `\n#### ❌ Terraform Validation Failed
+            <details>
+            <summary><code>terraform validate</code> output</summary>
+            <pre>\n
+            ${process.env.VALIDATE}
+            </pre>\n
+            </details>\n`;
+            }
+
+            if ("${{ inputs.plan }}" == "true") {
+              if ("${{ steps.plan.outputs.diff }}" == "true") {
+                comment += `\n#### 📜 Terraform Plan Has Changes\n`;
+              } else if ("${{ steps.plan.outcome }}" == "success") {
+                comment += `\n#### ✅ Terraform Plan Has No Changes\n`;
+              }
+
+              if ("${{ steps.plan.outcome }}" == "success") {
+                comment += `\n#### ✅ Terraform Plan Passed`;
+              } else {
+                comment += `\n#### ❌ Terraform Plan Failed`;
+              }
+              comment += `
+              <details>
+              <summary><code>terraform plan</code> output</summary>\n
+              \`\`\`hcl\n`;
+
+              if ("${{ steps.plan.outcome }}" == "success") {
+                comment += `${process.env.PLAN_OUT}`;
+              } else {
+                comment += `${process.env.PLAN_ERR}`;
+              }
+              
+              comment += `
+              \`\`\`\n
+              </details>`;
+            }
+
+            return comment;
+
+      - name: Find Comment
+        if: github.event_name == 'pull_request'
+        uses: peter-evans/find-comment@v3
+        id: fc
+        with:
+          comment-author: github-actions[bot]
+          issue-number: ${{ github.event.pull_request.number }}
+          body-includes: '## `${{ matrix.match }}` Terraform Checks'
+
+      - name: Create comment
+        if: github.event_name == 'pull_request'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.fc.outputs.comment-id }}
+          edit-mode: replace
+          issue-number: ${{ github.event.pull_request.number }}
+          body: ${{ steps.github-script.outputs.result }}
+
+      - name: Error if failed
+        if: steps.fmt.outcome == 'failure' || steps.validate.outcome == 'failure' || steps.init.outcome == 'failure' || steps.plan.outcome == 'failure' || steps.apply.outcome == 'failure' || steps.destroy.outcome == 'failure'
+        run: exit 1
+
+  # This adds an extra status check representing if all of the matrix jobs passed
+  # since GitHub actions doesn't let you specify all members of a matrix without having
+  # to maintain that list
+  terraform-results:
+    if: always()
+    needs: [ terraform, terraform-matrix ]
+    runs-on: ubuntu-22.04
+    steps:
+      - run: |
+          result="${{ needs.terraform-matrix.result }}"
+          if [[ "$result" == "success" || "$result" == "skipped" ]]; then
+            echo "All modules passed"
+          else
+            echo "One or more modules failed" >&2
+            exit 1
+          fi
+          result="${{ needs.terraform.result }}"
+          if [[ "$result" == "success" || "$result" == "skipped" ]]; then
+            echo "All modules passed"
+          else
+            echo "One or more modules failed" >&2
+            exit 1
+          fi

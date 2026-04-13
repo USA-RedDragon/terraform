@@ -1,0 +1,29 @@
+name: Terraform
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.ref }}'
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    name: Terraform
+    uses: ./terraform-workflow.yaml
+    permissions:
+      id-token: write      # Required for AWS auth
+      contents: read       # Required for actions/checkout
+      pull-requests: write # Required for commenting on PR
+    with:
+      working-directory: infra
+      plan: true
+      apply: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      aws-auth: true
+      aws-region: us-east-1
+    secrets:
+      aws-role-to-assume: arn:aws:iam::803205869942:role/mcswain-terraform
+      aws-role-session-name: mcswain-terraform

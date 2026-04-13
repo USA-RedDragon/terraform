@@ -1,0 +1,52 @@
+name: Pre-Commit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.ref }}'
+  cancel-in-progress: true
+
+jobs:
+  pre-commit:
+    name: Pre-Commit
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Generate GitHub App Token
+        uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.AUTO_COMMIT_APP_ID }}
+          private-key: ${{ secrets.AUTO_COMMIT_APP_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+      - run: pip3 install pre-commit
+      - name: Install terraform-docs
+        uses: jaxxstorm/action-install-gh-release@v1
+        with:
+          repo: terraform-docs/terraform-docs
+          # renovate: datasource=github-releases depName=terraform-docs/terraform-docs
+          tag: v0.17.0
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: ${{ runner.os }}-pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys:
+            ${{ runner.os }}-pre-commit-
+      - run: pre-commit run --show-diff-on-failure --color=always --all-files || true
+      - uses: stefanzweifel/git-auto-commit-action@04702edda442b2e678b25b537cec683a1493fcb9 # v7.1.0
+        with:
+          commit_message: "chore: Apply clippy fixes"
+          commit_user_name: usa-reddragon-auto-commit[bot]
+          commit_user_email: 234130638+github-actions[bot]@users.noreply.github.com
+          commit_author: "usa-reddragon-auto-commit[bot] <234130638+github-actions[bot]@users.noreply.github.com>"
+      - run: pre-commit run --show-diff-on-failure --color=always --all-files
