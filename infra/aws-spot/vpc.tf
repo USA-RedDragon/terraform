@@ -9,6 +9,17 @@ resource "aws_vpc" "ci" {
   tags                 = { Name = "ci-spot-vpc" }
 }
 
+resource "aws_default_route_table" "ci" {
+  default_route_table_id = aws_vpc.ci.default_route_table_id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.ci.id
+  }
+
+  tags = { Name = "ci-spot-public" }
+}
+
 resource "aws_internet_gateway" "ci" {
   vpc_id = aws_vpc.ci.id
 }
@@ -21,16 +32,7 @@ resource "aws_subnet" "ci_public" {
   tags                    = { Name = "ci-spot-public" }
 }
 
-resource "aws_route_table" "ci_public" {
-  vpc_id = aws_vpc.ci.id
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.ci.id
-  }
-}
-
 resource "aws_route_table_association" "ci_public" {
   subnet_id      = aws_subnet.ci_public.id
-  route_table_id = aws_route_table.ci_public.id
+  route_table_id = aws_default_route_table.ci.id
 }
