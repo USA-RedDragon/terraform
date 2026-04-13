@@ -35,7 +35,7 @@ jobs:
         with:
           repo: terraform-docs/terraform-docs
           # renovate: datasource=github-releases depName=terraform-docs/terraform-docs
-          tag: v0.17.0
+          tag: v0.22.0
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/pre-commit
