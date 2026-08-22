@@ -42,8 +42,12 @@ data "aws_iam_policy_document" "github_actions_deploy" {
   # Write the site. ListBucket is on the bucket itself, not its objects, and is
   # what `aws s3 sync --delete` needs to see which keys are already there.
   statement {
-    sid       = "SyncObjects"
-    actions   = ["s3:PutObject", "s3:DeleteObject"]
+    sid = "SyncObjects"
+    actions = [
+      "s3:PutObject",
+      "s3:DeleteObject",
+      "s3:AbortMultipartUpload",
+    ]
     resources = ["${aws_s3_bucket.site.arn}/*"]
   }
 
