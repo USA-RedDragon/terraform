@@ -13,7 +13,7 @@ concurrency:
 jobs:
   terraform:
     name: Terraform
-    uses: USA-RedDragon/terraform-workflow/.github/workflows/terraform.yaml@v1.0.0
+    uses: USA-RedDragon/terraform-workflow/.github/workflows/terraform.yaml@v1.0.1
     permissions:
       id-token: write      # Required for AWS auth
       contents: read       # Required for actions/checkout
@@ -27,3 +27,5 @@ jobs:
     secrets:
       aws-role-to-assume: arn:aws:iam::803205869942:role/mcswain-terraform
       aws-role-session-name: mcswain-terraform
+      secrets: |
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
