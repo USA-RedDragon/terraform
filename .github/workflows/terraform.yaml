@@ -13,7 +13,7 @@ concurrency:
 jobs:
   terraform:
     name: Terraform
-    uses: USA-RedDragon/terraform-workflow/.github/workflows/terraform.yaml@v1.0.2
+    uses: USA-RedDragon/terraform-workflow/.github/workflows/terraform.yaml@0bb301bed480bb471d4e216faffc36f42a6c6ebf # v1.0.2
     permissions:
       id-token: write      # Required for AWS auth
       contents: read       # Required for actions/checkout
