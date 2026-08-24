@@ -48,13 +48,13 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "s3:DeleteObject",
       "s3:AbortMultipartUpload",
     ]
-    resources = ["${aws_s3_bucket.site.arn}/*"]
+    resources = ["${module.site.bucket_arn}/*"]
   }
 
   statement {
     sid       = "ListBucket"
     actions   = ["s3:ListBucket"]
-    resources = [aws_s3_bucket.site.arn]
+    resources = [module.site.bucket_arn]
   }
 
   # Every deploy has to invalidate: none of the asset names change between
@@ -63,7 +63,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
   statement {
     sid       = "InvalidateEdge"
     actions   = ["cloudfront:CreateInvalidation"]
-    resources = [aws_cloudfront_distribution.site.arn]
+    resources = [module.site.distribution_arn]
   }
 }
 
