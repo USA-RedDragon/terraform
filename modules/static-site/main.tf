@@ -15,7 +15,11 @@ terraform {
 
 locals {
   all_domains = concat([var.domain_name], var.additional_domains)
-  origin_id   = "s3-${var.bucket_name}"
+
+  origin_id    = var.origin_id != null ? var.origin_id : "s3-${var.bucket_name}"
+  oac_name     = var.oac_name != null ? var.oac_name : "${var.bucket_name}-oac"
+  headers_name = var.response_headers_policy_name != null ? var.response_headers_policy_name : "${var.bucket_name}-headers"
+  cache_name   = var.cache_policy_name != null ? var.cache_policy_name : "${var.bucket_name}-revalidate"
 }
 
 # ---------------------------------------------------------------------------
@@ -137,7 +141,7 @@ resource "aws_acm_certificate_validation" "site" {
 # ---------------------------------------------------------------------------
 
 resource "aws_cloudfront_origin_access_control" "site" {
-  name                              = "${var.bucket_name}-oac"
+  name                              = local.oac_name
   description                       = "OAC for the ${var.domain_name} origin bucket"
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
@@ -161,7 +165,7 @@ resource "aws_cloudfront_origin_access_control" "site" {
 # response, after the cache lookup, so none of these headers participate in the
 # cache key and none of them affect what CloudFront stores.
 resource "aws_cloudfront_response_headers_policy" "site" {
-  name    = "${var.bucket_name}-headers"
+  name    = local.headers_name
   comment = "${var.cross_origin_isolation ? "COOP/COEP isolation + " : ""}shell cache policy for ${var.domain_name}"
 
   custom_headers_config {
@@ -246,7 +250,7 @@ resource "aws_cloudfront_response_headers_policy" "site" {
 # number would have to be near zero, because none of the asset names change
 # between builds.
 resource "aws_cloudfront_cache_policy" "site" {
-  name        = "${var.bucket_name}-revalidate"
+  name        = local.cache_name
   comment     = "Short edge TTL; no asset name on this site is content-hashed"
   min_ttl     = 0
   default_ttl = 300
