@@ -52,36 +52,23 @@ breaking either one fails quietly rather than loudly.
 | Name | Version |
 | ---- | ------- |
 | <a name="provider_aws"></a> [aws](#provider\_aws) | 6.61.0 |
-| <a name="provider_aws.us_east_1"></a> [aws.us\_east\_1](#provider\_aws.us\_east\_1) | 6.61.0 |
 | <a name="provider_cloudflare"></a> [cloudflare](#provider\_cloudflare) | 5.23.0 |
 
 ## Modules
 
-No modules.
+| Name | Source | Version |
+| ---- | ------ | ------- |
+| <a name="module_site"></a> [site](#module\_site) | ../../modules/static-site | n/a |
 
 ## Resources
 
 | Name | Type |
 | ---- | ---- |
-| [aws_acm_certificate.site](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/resources/acm_certificate) | resource |
-| [aws_acm_certificate_validation.site](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/resources/acm_certificate_validation) | resource |
-| [aws_cloudfront_cache_policy.site](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/resources/cloudfront_cache_policy) | resource |
-| [aws_cloudfront_distribution.site](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/resources/cloudfront_distribution) | resource |
-| [aws_cloudfront_origin_access_control.site](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/resources/cloudfront_origin_access_control) | resource |
-| [aws_cloudfront_response_headers_policy.site](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/resources/cloudfront_response_headers_policy) | resource |
 | [aws_iam_role.github_actions](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/resources/iam_role) | resource |
 | [aws_iam_role_policy.github_actions](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/resources/iam_role_policy) | resource |
-| [aws_s3_bucket.site](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/resources/s3_bucket) | resource |
-| [aws_s3_bucket_ownership_controls.site](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/resources/s3_bucket_ownership_controls) | resource |
-| [aws_s3_bucket_policy.site](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/resources/s3_bucket_policy) | resource |
-| [aws_s3_bucket_public_access_block.site](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/resources/s3_bucket_public_access_block) | resource |
-| [aws_s3_bucket_server_side_encryption_configuration.site](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/resources/s3_bucket_server_side_encryption_configuration) | resource |
-| [cloudflare_dns_record.acm_validation](https://registry.terraform.io/providers/cloudflare/cloudflare/5.23.0/docs/resources/dns_record) | resource |
-| [cloudflare_dns_record.rustdar](https://registry.terraform.io/providers/cloudflare/cloudflare/5.23.0/docs/resources/dns_record) | resource |
 | [aws_iam_openid_connect_provider.github](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/data-sources/iam_openid_connect_provider) | data source |
 | [aws_iam_policy_document.github_actions_assume](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.github_actions_deploy](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/data-sources/iam_policy_document) | data source |
-| [aws_iam_policy_document.site_origin](https://registry.terraform.io/providers/hashicorp/aws/6.61.0/docs/data-sources/iam_policy_document) | data source |
 | [cloudflare_zone.mcswain_dev](https://registry.terraform.io/providers/cloudflare/cloudflare/5.23.0/docs/data-sources/zone) | data source |
 
 ## Inputs
