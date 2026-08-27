@@ -15,3 +15,38 @@ variable "github_repo" {
   type        = string
   default     = "squallar/squallar"
 }
+
+variable "basemap_domain" {
+  description = <<-EOT
+    Hostname the basemap archive is served from. A subdomain of squallar.app so
+    that it binds into a zone this stack already reads, and so that the archive
+    and the app that reads it cannot end up on different registrable domains.
+
+    Changing this is not free on the client side: the app compiles the archive
+    URL in, and an old build keeps asking for the old name. Treat a rename as a
+    migration with an overlap period, not as an edit.
+  EOT
+  type        = string
+  default     = "tiles.squallar.app"
+}
+
+variable "basemap_cors_origins" {
+  description = <<-EOT
+    Origins allowed to read the basemap archive from a browser.
+
+    Production only by default. R2 matches these exactly -- there is no wildcard
+    form short of `*` -- so a local dev server cannot be covered by a pattern
+    and `*` is not the answer either: it would let any page on the internet
+    stream our egress, and while egress is $0 the Class B operations are not.
+
+    LOCAL WEB DEVELOPMENT therefore needs its origin added here temporarily.
+    There is no fixed port to pre-authorise: the browser rig picks one per run
+    (`.github/browser-rig/run_tier2.sh` serves on `127.0.0.1:$PORT`), so a
+    hardcoded `http://localhost:8080` would be a guess that works by luck.
+
+    Native builds are unaffected -- CORS is a browser mechanism and the desktop
+    and mobile HTTP stacks never consult it.
+  EOT
+  type        = list(string)
+  default     = ["https://squallar.app"]
+}

@@ -35,3 +35,13 @@ output "www_distribution_domain_name" {
   description = "CloudFront domain the squallar.com apex CNAME is flattened onto."
   value       = module.www.distribution_domain_name
 }
+
+output "basemap_bucket_name" {
+  description = "R2 bucket holding the basemap `.pmtiles` generations."
+  value       = cloudflare_r2_bucket.basemap.name
+}
+
+output "basemap_url" {
+  description = "Origin the app fetches basemap ranges from. Custom domain only; the r2.dev managed domain is asserted off."
+  value       = "https://${cloudflare_r2_custom_domain.basemap.domain}"
+}
