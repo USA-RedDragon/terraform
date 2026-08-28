@@ -39,9 +39,14 @@ def _mail(subject: str, body: str) -> None:
     msg["To"] = os.environ["ALERT_EMAIL"]
     msg.set_content(body)
 
+    # Explicit timeout: the Lambda's own 60s limit would otherwise be the only
+    # bound, and that surfaces as an opaque function timeout rather than a
+    # readable SMTP error. Same defect as the build script's, which hung a box
+    # for hours on 2026-08-28.
     with smtplib.SMTP_SSL(
         os.environ["SMTP_HOST"],
         int(os.environ["SMTP_PORT"]),
+        timeout=20,
         context=ssl.create_default_context(),
     ) as s:
         s.login("squallar", key)

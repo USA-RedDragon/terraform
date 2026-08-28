@@ -127,7 +127,12 @@ from email.message import EmailMessage
 m = EmailMessage()
 m["Subject"], m["From"], m["To"] = sys.argv[1], os.environ["ALERT_FROM"], os.environ["ALERT_TO"]
 m.set_content(sys.argv[2])
-with smtplib.SMTP_SSL(os.environ["SMTP_HOST"], int(os.environ["SMTP_PORT"]), context=ssl.create_default_context()) as s:
+# timeout=30 IS LOAD-BEARING. Without it, a relay that accepts the connection
+# and then stalls hangs the script forever. On 2026-08-28 the archive published
+# and verified correctly, then the box sat for hours in send_message() and never
+# reached its own terminate-instances -- ~$3 of spot time after the work was
+# already done. `|| echo` cannot rescue a call that never returns.
+with smtplib.SMTP_SSL(os.environ["SMTP_HOST"], int(os.environ["SMTP_PORT"]), timeout=30, context=ssl.create_default_context()) as s:
     s.login("squallar", os.environ["SMTP_KEY"]); s.send_message(m)
 PY
 }
@@ -210,9 +215,8 @@ printf '{"generation":"%s","key":"%s","bytes":%s,"started":"%s","completed":"%s"
 r2 cp /scratch/latest.json "s3://$R2_BUCKET/status/latest.json" --content-type application/json --cache-control "max-age=60"
 
 notify "squallar basemap $GEN published ($((BYTES/1000000000)) GB)" \
-  "$(printf 'generation %s\nkey        %s\nbytes      %s\nstarted    %s\ncompleted  %s\ninstance   %s\n\n--- layer stats top 20 ---\n%s\n' \
-     "$GEN" "$KEY" "$BYTES" "$STARTED" "$FINISHED" "$IID" \
-     "$(zcat /scratch/$GEN.pmtiles.layerstats.tsv.gz 2>/dev/null | awk -F'\t' 'NR>1{a[$4]+=$5} END{for(l in a) printf "%-22s %14d\n", l, a[l]}' | sort -k2 -rn | head -20)")"
+  "$(printf 'generation %s\nkey        %s\nbytes      %s\nstarted    %s\ncompleted  %s\ninstance   %s\n\nlayerstats basemap/%s.layerstats.tsv.gz\n' \
+     "$GEN" "$KEY" "$BYTES" "$STARTED" "$FINISHED" "$IID" "$GEN")"
 
 echo "=== done, terminating ==="
 aws ec2 terminate-instances --region "$REGION" --instance-ids "$IID"
