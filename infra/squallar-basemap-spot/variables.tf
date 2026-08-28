@@ -261,7 +261,7 @@ variable "terrain_tools_sha" {
     outcome.
   EOT
   type        = string
-  default     = "1acdbb9e723a"
+  default     = "1a4ec58c9259"
 }
 
 variable "terrain_bin_sha256" {
@@ -283,14 +283,14 @@ variable "terrain_bin_sha256" {
 
 variable "terrain_bootstrap_sha256" {
   description = <<-EOT
-    sha256 of `bootstrap-al2023.sh` at the same prefix, 4,624 bytes.
+    sha256 of `bootstrap-al2023.sh` at the same prefix, 5,105 bytes.
 
     Pinned for the same reason as the binary and not merely for symmetry: the
     bootstrap is the thing that `exec`s the binary, so a corrupted bootstrap is
     arbitrary root code on a box holding R2 write credentials.
   EOT
   type        = string
-  default     = "7f072ebdc2598b30905a1bf40a7db2cb5f27417fa29314dbab87d5708ed61762"
+  default     = "c7830dca55230a841eb2b690a691e13155c305c2c6d64b1b399f9847d021afd9"
 }
 
 variable "terrain_raster_encoding" {
