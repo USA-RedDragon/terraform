@@ -21,6 +21,34 @@ resource "aws_scheduler_schedule" "build" {
   schedule_expression_timezone = "UTC"
   state                        = var.schedule_state
 
+  # WITHOUT THIS, ANY APPLY THAT TOUCHES THIS RESOURCE LAUNCHES A PLANET BUILD.
+  #
+  # Two documented rules compose into that, and neither is obvious alone:
+  #
+  #   UpdateSchedule "uses all values, including empty values, specified in the
+  #   request and overrides the existing schedule. This is by design. This means
+  #   that if you do not set an optional field in your request, that field will
+  #   be set to its system-default value after the update."
+  #
+  #   "If you do not provide a StartDate for a rate-based schedule, your
+  #   schedule starts invoking the target immediately."
+  #
+  # `start_date` is optional, so omitting it makes every update reset it to
+  # absent, and absent means fire now. This is not theory: enabling the schedule
+  # in 8df1bf6 fired createFleet at 2026-08-28T04:38:34Z, ~87 minutes after the
+  # seed build finished, and that instance is the one that died on mdadm.
+  #
+  # So the value here is not a delay -- it is that terraform now SENDS this
+  # field on every update, which is what makes the omitted-field path
+  # unreachable.
+  #
+  # RESIDUAL, and it is why this is a var rather than a literal: `start_date`
+  # documents when invocations may BEGIN, so a value in the future is
+  # unambiguously safe. Once this timestamp passes, what an update does is NOT
+  # settled by the documentation. Bump it to the next intended fire whenever you
+  # edit this file.
+  start_date = var.build_schedule_start_date
+
   # OFF, not a window. A flexible window would let two builds drift closer
   # together than 35 days, which is exactly the property the cadence buys.
   flexible_time_window {

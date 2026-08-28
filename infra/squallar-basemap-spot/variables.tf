@@ -420,3 +420,17 @@ variable "terrain_fleet_instance_types" {
     "m6id.12xlarge", # 48 vCPU, 192 GiB, 2x1425 = 2850 GB
   ]
 }
+
+variable "build_schedule_start_date" {
+  description = <<-EOT
+    RFC3339, UTC, and it must be in the FUTURE. Anchors the rate(35 days)
+    interval and, more importantly, makes terraform send `start_date` on every
+    UpdateSchedule -- without it an omitted optional field is reset to its
+    system default, and a rate schedule with no start date invokes immediately.
+
+    Currently the next scheduled fire: 35 days after the 2026-08-28T04:38:34Z
+    invocation that enabling the schedule triggered.
+  EOT
+  type        = string
+  default     = "2026-10-02T04:38:34Z"
+}
