@@ -202,31 +202,64 @@ java -Xmx30g -jar planetiler.jar \
 BYTES=$(stat -c%s "/scratch/$GEN.pmtiles")
 echo "built $GEN: $BYTES bytes"
 
-# --- publish to a VERSIONED IMMUTABLE KEY ---
+# ASSERT THE MAGIC LOCALLY, BEFORE THE SPLIT. The monolith never travels any
+# more, so this is the last place the artifact can be checked as one file.
+HDR=$(head -c7 "/scratch/$GEN.pmtiles" | xxd -p)
+[ "$HDR" = "504d54696c6573" ] || { echo "built archive does not begin with PMTiles magic: $HDR"; false; }
+
+# --- SPLIT INTO EDGE-CACHEABLE PARTS ---
+# Cloudflare will not cache a single object over 512 MB on this plan tier
+# (measured on this zone: see infra/squallar/basemap_edge.tf -- ranges against
+# an over-limit object are BYPASS, first byte included). So the archive
+# publishes as 500,000,000-byte parts: <key>.part000, .part001, ... three
+# digits zero-padded, every part except the last exactly PART_BYTES. NO
+# bare-key monolith is uploaded; the reader probes <url>.part000 to detect
+# parts mode.
+#
+# Disk arithmetic, not an assumption: the split holds archive + parts at once,
+# doubling the archive's footprint -- 84 GB becomes 168 GB, on a build whose
+# peak elsewhere is ~460 GB, against a >= 2.6 TB stripe. Comfortable.
+PART_BYTES=500000000
+PARTS=$(( (BYTES + PART_BYTES - 1) / PART_BYTES ))
+split -b $PART_BYTES -d -a 3 "/scratch/$GEN.pmtiles" "/scratch/$GEN.pmtiles.part"
+NFILES=$(ls "/scratch/$GEN.pmtiles.part"[0-9][0-9][0-9] | wc -l)
+[ "$NFILES" -eq "$PARTS" ] || { echo "split produced $NFILES files, expected $PARTS"; false; }
+echo "split $BYTES bytes into $PARTS parts of $PART_BYTES"
+
+# --- publish to a VERSIONED IMMUTABLE KEY prefix ---
 # Never overwrite a live key. A corrupt archive on a path users already read is
 # the worst version of silent partial success.
-r2 cp "/scratch/$GEN.pmtiles" "s3://$R2_BUCKET/$KEY" --content-type application/octet-stream
+for p in "/scratch/$GEN.pmtiles.part"[0-9][0-9][0-9]; do
+  r2 cp "$p" "s3://$R2_BUCKET/basemap/$(basename "$p")" --content-type application/octet-stream
+done
 r2 cp "/scratch/$GEN.pmtiles.layerstats.tsv.gz" "s3://$R2_BUCKET/basemap/$GEN.layerstats.tsv.gz" || true
 
 # --- VERIFY THROUGH THE PUBLIC PATH, not through the writer ---
 # Reading it back over HTTPS proves the bytes are servable, that ranges work,
 # and that CORS/routing are intact -- none of which a successful PUT proves.
+# The PMTiles magic check applies to .part000 ONLY: parts 1+ are mid-file
+# bytes and MUST NOT be magic-checked.
 sleep 10
-HDR=$(curl -sf -r 0-126 "$ARCHIVE_BASE/$KEY" | xxd -p | head -c 14)
-[ "$HDR" = "504d54696c6573" ] || { echo "published archive does not begin with PMTiles magic: $HDR"; false; }
-REMOTE=$(curl -sfI "$ARCHIVE_BASE/$KEY" | grep -i '^content-length:' | tr -d '\r' | awk '{print $2}')
-[ "$REMOTE" = "$BYTES" ] || { echo "size mismatch: local $BYTES remote $REMOTE"; false; }
-echo "verified $KEY through the public path"
+HDR=$(curl -sf -r 0-126 "$ARCHIVE_BASE/$KEY.part000" | xxd -p | head -c 14)
+[ "$HDR" = "504d54696c6573" ] || { echo "published .part000 does not begin with PMTiles magic: $HDR"; false; }
+for p in "/scratch/$GEN.pmtiles.part"[0-9][0-9][0-9]; do
+  PN=$(basename "$p"); PB=$(stat -c%s "$p")
+  REMOTE=$(curl -sfI "$ARCHIVE_BASE/basemap/$PN" | grep -i '^content-length:' | tr -d '\r' | awk '{print $2}')
+  [ "$REMOTE" = "$PB" ] || { echo "part size mismatch: $PN local $PB remote $REMOTE"; false; }
+done
+echo "verified $PARTS parts of $KEY through the public path"
 
 # --- THE STATUS OBJECT IS WRITTEN LAST. It is what publishes the generation. ---
+# "key" is the LOGICAL key -- no object lives at it; readers append .partNNN.
+# part_bytes/parts are additive; readers ignore fields they do not know.
 FINISHED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-printf '{"generation":"%s","key":"%s","bytes":%s,"started":"%s","completed":"%s"}\n' \
-  "$GEN" "$KEY" "$BYTES" "$STARTED" "$FINISHED" > /scratch/latest.json
+printf '{"generation":"%s","key":"%s","bytes":%s,"part_bytes":%s,"parts":%s,"started":"%s","completed":"%s"}\n' \
+  "$GEN" "$KEY" "$BYTES" "$PART_BYTES" "$PARTS" "$STARTED" "$FINISHED" > /scratch/latest.json
 r2 cp /scratch/latest.json "s3://$R2_BUCKET/status/latest.json" --content-type application/json --cache-control "max-age=60"
 
-notify "squallar basemap $GEN published ($((BYTES/1000000000)) GB)" \
-  "$(printf 'generation %s\nkey        %s\nbytes      %s\nstarted    %s\ncompleted  %s\ninstance   %s\n\nlayerstats basemap/%s.layerstats.tsv.gz\n' \
-     "$GEN" "$KEY" "$BYTES" "$STARTED" "$FINISHED" "$IID" "$GEN")"
+notify "squallar basemap $GEN published ($((BYTES/1000000000)) GB, $PARTS parts)" \
+  "$(printf 'generation %s\nkey        %s\nbytes      %s\nparts      %s x %s\nstarted    %s\ncompleted  %s\ninstance   %s\n\nlayerstats basemap/%s.layerstats.tsv.gz\n' \
+     "$GEN" "$KEY" "$BYTES" "$PARTS" "$PART_BYTES" "$STARTED" "$FINISHED" "$IID" "$GEN")"
 
 echo "=== done, terminating ==="
 aws ec2 terminate-instances --region "$REGION" --instance-ids "$IID"

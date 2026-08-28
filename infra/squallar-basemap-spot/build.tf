@@ -77,7 +77,20 @@ resource "aws_launch_template" "build" {
 
   monitoring { enabled = true }
 
-  user_data = base64encode(templatefile("${path.module}/build.sh.tftpl", {
+  # GZIPPED, like terrain.tf -- and here it is REQUIRED, not margin. STATE OF
+  # THE MEASUREMENT (terraform's own render against the real variable values,
+  # 2026-08-28, after the parts-publish additions):
+  #
+  #   build.sh.tftpl rendered        12,995 bytes
+  #   plain base64                   17,328  -- OVER the 16,384 cap by 944
+  #   base64gzip                      7,956  -- 49% of the cap
+  #
+  # The parts publish is what pushed plain base64 over. cloud-init
+  # decompresses gzipped user-data before it sniffs the `#!/bin/bash` --
+  # verified from cloud-init source when terrain.tf adopted it, and since
+  # PROVEN LIVE: terrain/baccb229ee57-20260828 was built and published through
+  # this exact gzipped path.
+  user_data = base64gzip(templatefile("${path.module}/build.sh.tftpl", {
     region             = data.aws_region.current.region
     log_group          = aws_cloudwatch_log_group.build.name
     r2_param           = local.r2_param_name
@@ -98,11 +111,13 @@ resource "aws_launch_template" "build" {
 
 # user-data is capped at 16 KiB AFTER base64, and the script is close enough to
 # be worth asserting rather than discovering on a failed launch -- where the
-# symptom is an instance that boots and does nothing at all.
+# symptom is an instance that boots and does nothing at all. Asserts the SAME
+# quantity EC2 receives -- the rendered, encoded attribute -- so it stays true
+# whether or not the encoding is compressed.
 check "user_data_fits" {
   assert {
     condition     = length(aws_launch_template.build.user_data) < 16384
-    error_message = "Rendered user-data is over EC2's 16384 base64-byte limit. Move the script to S3 and bootstrap it."
+    error_message = "Rendered user-data is over EC2's 16384 base64-byte limit even gzipped. Move the tail of the script to R2 and fetch it, like terrain's bootstrap."
   }
 }
 

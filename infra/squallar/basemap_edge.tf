@@ -24,6 +24,15 @@ resource "cloudflare_ruleset" "basemap_cache" {
         edge_ttl = {
           mode    = "override_origin"
           default = 31536000
+          status_code_ttl = [
+            {
+              status_code_range = {
+                from = 400
+                to   = 599
+              }
+              value = 0
+            }
+          ]
         }
 
         browser_ttl = {

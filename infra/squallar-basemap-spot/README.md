@@ -204,6 +204,57 @@ this. The relay is reached on 465 with implicit TLS.
 launch an instance wearing any role in the account. Either condition alone is
 too wide.
 
+## Parts, not monoliths
+
+Cloudflare will not cache a single object over 512 MB on this plan tier —
+measured on this zone (`../squallar/basemap_edge.tf`): every range against the
+83 GB archive is BYPASS, first byte included. So **both build scripts publish
+each archive as 500,000,000-byte parts and no bare-key monolith**:
+
+- `<key>.part000`, `.part001`, … — three digits, zero-padded, same prefix as
+  the archive; every part except the last is exactly 500,000,000 bytes
+  (under the 512 MB ceiling with margin).
+- The reader probes `<url>.part000` to detect parts mode. `status/latest.json`
+  and `status/terrain.json` carry `part_bytes` and `parts` as additive fields
+  for humans and tooling; the probe, not the status object, is the contract.
+- The PMTiles magic check applies to `.part000` only — parts 1+ are mid-file
+  bytes and must not be magic-checked.
+- The split doubles the archive's local disk footprint at the moment of split
+  (OSM: 84 GB → 168 GB against a ≥2.6 TB stripe); the arithmetic is in each
+  script next to the `split`.
+
+**`migrate-to-parts.sh`** (stack root) is the one-off, run-by-hand backfill for
+the two archives published before this landed — `basemap/omt-20260828.pmtiles`
+(168 parts) and `terrain/baccb229ee57-20260828/squallar-contours.pmtiles`
+(80 parts). It splits them **server-side on R2** (multipart
+`upload-part-copy --copy-source-range`, zero download, ~744 Class A ops ≈
+$0.003), verifies every part through the public path, stamps the status
+objects, and is idempotent. It needs the local `r2` AWS profile. Run it once;
+nothing ever needs it again. The old monoliths stay in the bucket untouched
+until somebody deletes them.
+
+**One edge change belongs in the sibling repo, not here.** The cache rule in
+`../squallar/basemap_edge.tf` already covers `/basemap/` and `/terrain/`, so
+parts inherit eligibility and both TTLs. The missing piece is Smart Tiered
+Cache, which bounds per-POP cache fills through one upper tier instead of
+letting every POP fill from R2 independently — now that parts are actually
+cacheable, that is the difference between ~1 Class B read per part per upper
+tier and ~1 per POP. Zone-wide setting, but `tiles.squallar.app` is the only
+proxied hostname in the zone, so it reaches the archive and nothing else:
+
+```hcl
+# Smart Tiered Cache: cache misses at any POP fill through one upper-tier POP
+# near the origin instead of every POP reading R2 directly. Zone-wide, but
+# tiles.squallar.app is the only proxied hostname in this zone (the static
+# sites are DNS-only), so in effect it scopes to the archive. With parts under
+# the 512 MB cacheable ceiling this bounds worldwide fill traffic -- i.e. the
+# Class B bill -- per part at roughly one origin read per upper tier.
+resource "cloudflare_tiered_cache" "squallar_app" {
+  zone_id = data.cloudflare_zone.squallar_app.zone_id
+  value   = "on"
+}
+```
+
 ## What this does not do
 
 - **No archive is retired.** Old generations stay in the bucket; nothing here

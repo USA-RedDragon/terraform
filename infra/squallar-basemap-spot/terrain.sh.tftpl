@@ -319,42 +319,82 @@ ARCHIVES=("$OUT"/*.pmtiles)
 # carrying a .pmtiles name here before -- 6,402,048 bytes where 4,838,849 were
 # expected, and `pmtiles show` printing nothing. The binary asserts this too;
 # asserting again costs one head(1) per file and the two checks are independent.
+# EVERY ARCHIVE PUBLISHES AS PARTS, NEVER AS A BARE-KEY MONOLITH. Cloudflare
+# will not cache a single object over 512 MB on this plan tier (measured on
+# this zone: infra/squallar/basemap_edge.tf -- ranges against an over-limit
+# object are BYPASS, first byte included), so each archive ships as
+# 500,000,000-byte slices: <key>.part000, .part001, ... three digits
+# zero-padded, every part except the last exactly PART_BYTES. An archive
+# under 500 MB still ships as a single .part000 -- the reader probes
+# <url>.part000 to detect parts mode, and one detection rule beats two.
+#
+# Disk arithmetic: the split holds archive + parts at once, doubling each
+# archive's footprint at the moment of split (contours 39.5 GB -> 79 GB).
+# The raster pass already budgets 2x archive + ~50 GB (~780 GB) on the
+# stripe, so the extra 1x archive is inside the existing envelope.
+PART_BYTES=500000000
 JSON=""
 for f in "$${ARCHIVES[@]}"; do
   M=$(head -c7 "$f" | xxd -p)
   [ "$M" = "504d54696c6573" ] || { echo "FATAL: $f does not begin with PMTiles magic: $M"; false; }
   N=$(basename "$f"); B=$(stat -c%s "$f")
-  echo "built $N: $B bytes"
-  r2 cp "$f" "s3://$R2_BUCKET/$PREFIX/$N" --content-type application/octet-stream
-  JSON="$JSON$${JSON:+,}$(printf '{"name":"%s","key":"%s/%s","bytes":%s}' "$N" "$PREFIX" "$N" "$B")"
+  NPARTS=$(( (B + PART_BYTES - 1) / PART_BYTES ))
+  split -b $PART_BYTES -d -a 3 "$f" "$f.part"
+  NFILES=$(ls "$f.part"[0-9][0-9][0-9] | wc -l)
+  [ "$NFILES" -eq "$NPARTS" ] || { echo "FATAL: split of $N produced $NFILES files, expected $NPARTS"; false; }
+  echo "built $N: $B bytes, $NPARTS parts"
+  for p in "$f.part"[0-9][0-9][0-9]; do
+    r2 cp "$p" "s3://$R2_BUCKET/$PREFIX/$(basename "$p")" --content-type application/octet-stream
+  done
+  JSON="$JSON$${JSON:+,}$(printf '{"name":"%s","key":"%s/%s","bytes":%s,"parts":%s}' "$N" "$PREFIX" "$N" "$B" "$NPARTS")"
 done
 
 # --- VERIFY THROUGH THE PUBLIC PATH, not through the writer ---
 # A successful PUT proves none of: servable bytes, working ranges, intact
 # routing. A range request proves all three, and it is what the app does.
+# The PMTiles magic check applies to .part000 ONLY: parts 1+ are mid-file
+# bytes and MUST NOT be magic-checked.
 sleep 10
 for f in "$${ARCHIVES[@]}"; do
-  N=$(basename "$f"); B=$(stat -c%s "$f")
-  HDR=$(curl -sf -r 0-126 "$ARCHIVE_BASE/$PREFIX/$N" | xxd -p | head -c 14)
-  [ "$HDR" = "504d54696c6573" ] || { echo "FATAL: published $N does not begin with PMTiles magic: $HDR"; false; }
-  REMOTE=$(curl -sfI "$ARCHIVE_BASE/$PREFIX/$N" | grep -i '^content-length:' | tr -d '\r' | awk '{print $2}')
-  [ "$REMOTE" = "$B" ] || { echo "FATAL: $N size mismatch: local $B remote $REMOTE"; false; }
-  echo "verified $PREFIX/$N through the public path"
+  N=$(basename "$f")
+  HDR=$(curl -sf -r 0-126 "$ARCHIVE_BASE/$PREFIX/$N.part000" | xxd -p | head -c 14)
+  [ "$HDR" = "504d54696c6573" ] || { echo "FATAL: published $N.part000 does not begin with PMTiles magic: $HDR"; false; }
+  for p in "$f.part"[0-9][0-9][0-9]; do
+    PN=$(basename "$p"); PB=$(stat -c%s "$p")
+    REMOTE=$(curl -sfI "$ARCHIVE_BASE/$PREFIX/$PN" | grep -i '^content-length:' | tr -d '\r' | awk '{print $2}')
+    [ "$REMOTE" = "$PB" ] || { echo "FATAL: $PN size mismatch: local $PB remote $REMOTE"; false; }
+  done
+  echo "verified $PREFIX/$N parts through the public path"
 done
 
 # --- THE STATUS OBJECT IS WRITTEN LAST. It is what publishes the generation. ---
-# status/terrain.json, NOT status/latest.json: the heartbeat lambda reads
-# latest.json and alarms when it is older than stale_after_days. Terrain is
-# one-shot and would be "stale" forever by that clock, so it gets its own key
-# and nothing watches it.
+# PER-ARCHIVE status keys -- status/terrain-<name>.json -- NOT one shared
+# status/terrain.json. The shared file was write-whole-from-this-run's-output:
+# a `target=raster` run would have rewritten it from an $OUT holding only the
+# hillshade archive, silently dropping the contours entry. Merging instead was
+# rejected because the file's schema has one top-level generation/prefix, and
+# archives from different runs have different ones -- a merged file would lie
+# about somebody's generation. One key per archive keeps every fact
+# self-contained and makes partial-target runs unable to clobber anything.
+#
+# Not status/latest.json, either: the heartbeat lambda reads that and alarms on
+# staleness. Terrain is one-shot and would read "stale" forever by that clock.
+#
+# A legacy status/terrain.json from before this change may exist; it is not
+# written, read, or deleted here.
 FINISHED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-printf '{"generation":"%s","tools_sha":"%s","prefix":"%s","encoding":"%s","archives":[%s],"started":"%s","completed":"%s"}\n' \
-  "$GEN" "$TOOLS_SHA" "$PREFIX" "$RASTER_ENCODING" "$JSON" "$STARTED" "$FINISHED" > "$WORK/terrain.json"
-if [ -n "$SMOKE_CHUNK" ] || [ -n "$SMOKE_SUPERCELL" ]; then
-  echo "smoke run: NOT writing status/terrain.json"; cat "$WORK/terrain.json"
-else
-  r2 cp "$WORK/terrain.json" "s3://$R2_BUCKET/status/terrain.json" --content-type application/json --cache-control "max-age=60"
-fi
+for f in "$${ARCHIVES[@]}"; do
+  N=$(basename "$f"); B=$(stat -c%s "$f")
+  NPARTS=$(( (B + PART_BYTES - 1) / PART_BYTES ))
+  SNAME="terrain-$${N%.pmtiles}.json"
+  printf '{"generation":"%s","tools_sha":"%s","prefix":"%s","encoding":"%s","name":"%s","key":"%s/%s","bytes":%s,"part_bytes":%s,"parts":%s,"started":"%s","completed":"%s"}\n' \
+    "$GEN" "$TOOLS_SHA" "$PREFIX" "$RASTER_ENCODING" "$N" "$PREFIX" "$N" "$B" "$PART_BYTES" "$NPARTS" "$STARTED" "$FINISHED" > "$WORK/$SNAME"
+  if [ -n "$SMOKE_CHUNK" ] || [ -n "$SMOKE_SUPERCELL" ]; then
+    echo "smoke run: NOT writing status/$SNAME"; cat "$WORK/$SNAME"
+  else
+    r2 cp "$WORK/$SNAME" "s3://$R2_BUCKET/status/$SNAME" --content-type application/json --cache-control "max-age=60"
+  fi
+done
 
 notify "squallar terrain $GEN published" \
   "$(printf 'generation %s\ntools sha  %s\nprefix     %s\nencoding   %s\nstarted    %s\ncompleted  %s\ninstance   %s\n\n%s\n' \

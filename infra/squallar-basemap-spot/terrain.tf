@@ -69,9 +69,9 @@ resource "aws_launch_template" "terrain" {
 
   # GZIPPED, AND THAT IS A DECISION WITH A COST. STATE OF THE MEASUREMENT:
   #
-  #   terrain.sh.tftpl rendered      16,240 bytes
-  #   plain base64                   21,656  -- OVER the 16,384 cap by 5,272
-  #   base64gzip                      9,988  -- 61% of the cap
+  #   terrain.sh.tftpl rendered      19,785 bytes   (re-measured 2026-08-28,
+  #   plain base64                   26,380         after the parts publish)
+  #   base64gzip                     12,004  -- 73% of the cap
   #
   # (measured by terraform itself against the real variable values, not by
   # base64-ing the unrendered template -- rendering grows it.)
@@ -79,10 +79,10 @@ resource "aws_launch_template" "terrain" {
   # The bootstrap is already fetched from R2 rather than inlined (inlining its
   # 4,624 bytes would add ~6.2 KB of base64 on top), so compression is what is
   # left. cloud-init decompresses gzipped user-data before it sniffs the
-  # `#!/bin/bash`, which is why this works -- BUT THAT PATH HAS NOT BEEN
-  # EXECUTED HERE. If the assumption is wrong the symptom is the worst one this
-  # stack has: a box that boots, runs nothing, produces no log stream, and
-  # terminates on the dead-man switch with nothing to read afterwards.
+  # `#!/bin/bash`, which is why this works -- verified from cloud-init source,
+  # and since PROVEN LIVE: terrain/baccb229ee57-20260828 was built and
+  # published through this exact gzipped path. build.tf now gzips too and
+  # leans on the same fact.
   #
   # `var.terrain_smoke_filter` exists to buy that back for a few dollars. Set it
   # to a cell-name substring, launch, and the whole path proves itself against
