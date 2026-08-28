@@ -150,6 +150,11 @@ trap - EXIT          # the early bailout trap has done its job
 trap 'fail $LINENO' ERR
 set -e
 
+# mdadm BEFORE the striping block, not with the Java install below it: `mdadm`
+# was called six lines before it was installed, which failed every multi-volume
+# launch at line 170 while single-volume types would have passed.
+dnf install -y mdadm >/dev/null
+
 # --- scratch on instance-store NVMe, never EBS ---
 # STRIPE ALL INSTANCE-STORE VOLUMES, do not take the first.
 #
@@ -173,7 +178,7 @@ fi
 mkfs.xfs -f "$DEV"; mkdir -p /scratch; mount "$DEV" /scratch
 df -h /scratch
 
-dnf install -y java-21-amazon-corretto-headless mdadm >/dev/null
+dnf install -y java-21-amazon-corretto-headless >/dev/null
 curl -fSL --retry 5 -o /scratch/planetiler.jar \
   "https://github.com/onthegomap/planetiler/releases/download/v$PLANETILER_VERSION/planetiler.jar"
 
