@@ -34,6 +34,19 @@ resource "aws_launch_template" "build" {
   name        = "squallar-basemap-build"
   description = "Planet basemap build: instance-store scratch, self-terminating. Market chosen by the fleet."
 
+  # EVERY NEW VERSION BECOMES THE DEFAULT.
+  #
+  # Without this the default stays pinned at version 1 forever while edits pile
+  # up as un-defaulted versions. Our own callers all name `Version = "$Latest"`
+  # so they were fine -- but a hand `run-instances` or `create-fleet` that omits
+  # the version silently gets v1: the original script, before the GetParameter
+  # retry, before instance-store striping, before the SMTP timeout, with the
+  # 3.34 GB layerstats aggregation still on the post-publish path.
+  #
+  # Observed 2026-08-28 at latest=6, default=1. Right template, plausible
+  # launch, six generations of fixes absent and nothing to indicate it.
+  update_default_version = true
+
   image_id               = data.aws_ami.al2023.id
   vpc_security_group_ids = [aws_security_group.build.id]
 
