@@ -1,0 +1,138 @@
+#!/bin/bash
+# Planet basemap build. Runs once, publishes, terminates.
+# Rendered from build.sh.tftpl by terraform; do not edit on the box.
+set -uo pipefail
+
+REGION="${region}"
+LOG_GROUP="${log_group}"
+R2_PARAM="${r2_param}"
+SMTP_PARAM="${smtp_param}"
+R2_BUCKET="${r2_bucket}"
+R2_ENDPOINT="https://${r2_account_id}.r2.cloudflarestorage.com"
+ARCHIVE_BASE="${archive_base_url}"
+ALERT_TO="${alert_email}"
+ALERT_FROM="${alert_from}"
+SMTP_HOST="${smtp_host}"
+SMTP_PORT="${smtp_port}"
+PLANETILER_VERSION="${planetiler_version}"
+
+# DEAD-MAN SWITCH, ARMED FIRST, BEFORE ANYTHING CAN FAIL.
+# Paired with instance_initiated_shutdown_behavior=terminate in the launch
+# template. If this script hangs, deadlocks, or dies before its cleanup, the
+# box still dies. Nothing has to notice.
+shutdown -h +${max_build_minutes} &
+
+IID=$(curl -sf -H "X-aws-ec2-metadata-token: $(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 300')" http://169.254.169.254/latest/meta-data/instance-id)
+GEN="omt-$(date -u +%Y%m%d)"
+KEY="basemap/$GEN.pmtiles"
+STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+exec > >(tee -a /var/log/basemap-build.log) 2>&1
+echo "=== $GEN on $IID, started $STARTED ==="
+
+# SHIP THE LOG OFF THE BOX, or this build is unobservable.
+# There is no SSH by design and the instance terminates itself, so a local file
+# dies with the machine. The failure mail carries a tail, but a build reaped by
+# the dead-man switch sends no mail at all -- that case is precisely the one
+# that needs a log, and it is the one that would have had none.
+dnf install -y amazon-cloudwatch-agent >/dev/null 2>&1 || echo "WARNING: no cloudwatch agent; log stays local"
+cat > /opt/aws/amazon-cloudwatch-agent/etc/basemap.json <<CWCFG
+{"logs":{"logs_collected":{"files":{"collect_list":[
+  {"file_path":"/var/log/basemap-build.log","log_group_name":"$LOG_GROUP","log_stream_name":"$IID","timestamp_format":"%Y-%m-%dT%H:%M:%SZ"},
+  {"file_path":"/var/log/cloud-init-output.log","log_group_name":"$LOG_GROUP","log_stream_name":"$IID-cloudinit"}
+]}}}}
+CWCFG
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/basemap.json >/dev/null 2>&1 \
+  || echo "WARNING: cloudwatch agent did not start; log stays local"
+
+# --- credentials, straight into the environment, never onto disk ---
+CREDS=$(aws ssm get-parameter --region "$REGION" --name "$R2_PARAM" --with-decryption --query Parameter.Value --output text)
+export AWS_ACCESS_KEY_ID=$(python3 -c 'import json,sys;print(json.load(sys.stdin)["access_key_id"])' <<<"$CREDS")
+export AWS_SECRET_ACCESS_KEY=$(python3 -c 'import json,sys;print(json.load(sys.stdin)["secret_access_key"])' <<<"$CREDS")
+SMTP_KEY=$(aws ssm get-parameter --region "$REGION" --name "$SMTP_PARAM" --with-decryption --query Parameter.Value --output text)
+unset CREDS
+
+notify() { # subject, body
+  python3 - "$1" "$2" <<'PY' || echo "WARNING: mail failed, continuing"
+import os, smtplib, ssl, sys
+from email.message import EmailMessage
+m = EmailMessage()
+m["Subject"], m["From"], m["To"] = sys.argv[1], os.environ["ALERT_FROM"], os.environ["ALERT_TO"]
+m.set_content(sys.argv[2])
+with smtplib.SMTP_SSL(os.environ["SMTP_HOST"], int(os.environ["SMTP_PORT"]), context=ssl.create_default_context()) as s:
+    s.login("squallar", os.environ["SMTP_KEY"]); s.send_message(m)
+PY
+}
+export SMTP_HOST SMTP_PORT SMTP_KEY ALERT_TO ALERT_FROM
+
+# FAILURE IS REPORTED, AND THEN THE BOX STILL DIES.
+# The trap is the courtesy; the shutdown above is the guarantee.
+fail() {
+  echo "FAILED at line $1"
+  notify "squallar basemap $GEN FAILED" "$(printf 'Instance %s\nStarted %s\nFailed at line %s\n\n--- last 80 lines ---\n%s\n' "$IID" "$STARTED" "$1" "$(tail -80 /var/log/basemap-build.log)")"
+  aws ec2 terminate-instances --region "$REGION" --instance-ids "$IID" || shutdown -h now
+  exit 1
+}
+trap 'fail $LINENO' ERR
+set -e
+
+# --- scratch on instance-store NVMe, never EBS ---
+DISK=$(lsblk -dnp -o NAME,MODEL | grep -i "instance storage" | head -1 | awk '{print $1}')
+[ -n "$DISK" ] || { echo "no instance store found"; exit 1; }
+mkfs.xfs -f "$DISK"; mkdir -p /scratch; mount "$DISK" /scratch
+df -h /scratch
+
+dnf install -y java-21-amazon-corretto-headless >/dev/null
+curl -fSL --retry 5 -o /scratch/planetiler.jar \
+  "https://github.com/onthegomap/planetiler/releases/download/v$PLANETILER_VERSION/planetiler.jar"
+
+# --- build ---
+cd /scratch
+# -Xmx30g AND NOT MORE, on a 128 GiB box. Counter-intuitive and load-bearing:
+# with --storage=mmap planetiler wants a SMALL heap and leaves the rest to the
+# OS page cache, which is what holds the ~114 GB node and multipolygon cache.
+# A large -Xmx starves exactly the cache the mmap path depends on and the build
+# gets slower, not faster.
+java -Xmx30g -jar planetiler.jar \
+  --area=planet --download --download-threads=8 \
+  --output=/scratch/$GEN.pmtiles --output-layerstats --force \
+  --nodemap-type=array --storage=mmap
+
+BYTES=$(stat -c%s "/scratch/$GEN.pmtiles")
+echo "built $GEN: $BYTES bytes"
+
+# --- publish to a VERSIONED IMMUTABLE KEY ---
+# Never overwrite a live key. A corrupt archive on a path users already read is
+# the worst version of silent partial success.
+aws s3 cp "/scratch/$GEN.pmtiles" "s3://$R2_BUCKET/$KEY" \
+  --endpoint-url "$R2_ENDPOINT" --region auto \
+  --content-type application/octet-stream --only-show-errors
+aws s3 cp "/scratch/$GEN.pmtiles.layerstats.tsv.gz" "s3://$R2_BUCKET/basemap/$GEN.layerstats.tsv.gz" \
+  --endpoint-url "$R2_ENDPOINT" --region auto --only-show-errors || true
+
+# --- VERIFY THROUGH THE PUBLIC PATH, not through the writer ---
+# Reading it back over HTTPS proves the bytes are servable, that ranges work,
+# and that CORS/routing are intact -- none of which a successful PUT proves.
+sleep 10
+HDR=$(curl -sf -r 0-126 "$ARCHIVE_BASE/$KEY" | xxd -p | head -c 14)
+[ "$HDR" = "504d54696c6573" ] || { echo "published archive does not begin with PMTiles magic: $HDR"; exit 1; }
+REMOTE=$(curl -sfI "$ARCHIVE_BASE/$KEY" | grep -i '^content-length:' | tr -d '\r' | awk '{print $2}')
+[ "$REMOTE" = "$BYTES" ] || { echo "size mismatch: local $BYTES remote $REMOTE"; exit 1; }
+echo "verified $KEY through the public path"
+
+# --- THE STATUS OBJECT IS WRITTEN LAST. It is what publishes the generation. ---
+FINISHED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '{"generation":"%s","key":"%s","bytes":%s,"started":"%s","completed":"%s"}\n' \
+  "$GEN" "$KEY" "$BYTES" "$STARTED" "$FINISHED" > /scratch/latest.json
+aws s3 cp /scratch/latest.json "s3://$R2_BUCKET/status/latest.json" \
+  --endpoint-url "$R2_ENDPOINT" --region auto \
+  --content-type application/json --cache-control "max-age=60" --only-show-errors
+
+notify "squallar basemap $GEN published ($((BYTES/1000000000)) GB)" \
+  "$(printf 'generation %s\nkey        %s\nbytes      %s\nstarted    %s\ncompleted  %s\ninstance   %s\n\n--- layer stats top 20 ---\n%s\n' \
+     "$GEN" "$KEY" "$BYTES" "$STARTED" "$FINISHED" "$IID" \
+     "$(zcat /scratch/$GEN.pmtiles.layerstats.tsv.gz 2>/dev/null | awk -F'\t' 'NR>1{a[$4]+=$5} END{for(l in a) printf "%-22s %14d\n", l, a[l]}' | sort -k2 -rn | head -20)")"
+
+echo "=== done, terminating ==="
+aws ec2 terminate-instances --region "$REGION" --instance-ids "$IID"
