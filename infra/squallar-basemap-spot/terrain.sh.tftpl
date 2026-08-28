@@ -1,0 +1,331 @@
+#!/bin/bash
+# Terrain build. Runs once, publishes two archives, terminates.
+# Rendered from terrain.sh.tftpl by terraform; do not edit on the box.
+#
+# The SECOND path in this stack, and deliberately a sibling rather than a mode
+# of the first. It shares the launch-template shape, the IAM role, the VPC and
+# EVERY hardening lesson with build.sh.tftpl -- the rationale for each is
+# written out there and is not duplicated here -- and shares nothing else:
+# different input (Copernicus GLO-30, not OSM), different toolchain
+# (GDAL/tippecanoe/go-pmtiles, not planetiler), and NO SCHEDULE AT ALL. The DEM
+# does not change, so this is human-triggered exactly when the tools change.
+set -euo pipefail
+
+# Early bailout, armed before fail() can exist. See build.sh.tftpl.
+trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "FATAL: exited $rc before the reporting trap was armed"; sleep 45; shutdown -h now; fi' EXIT
+
+# LOGGING FIRST, before anything that can fail. A failure earlier than this
+# creates no log stream at all and a terminated instance loses its console
+# output within minutes, which made one OSM failure unrecoverable.
+mkdir -p /var/log
+touch /var/log/terrain-build.log
+dnf install -y amazon-cloudwatch-agent >/dev/null 2>&1 || echo "WARNING: cloudwatch agent unavailable; logs stay on the box"
+if [ -d /opt/aws/amazon-cloudwatch-agent ]; then
+  mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
+  cat > /opt/aws/amazon-cloudwatch-agent/etc/terrain.json <<CWCFG
+{"logs":{"logs_collected":{"files":{"collect_list":[
+  {"file_path":"/var/log/terrain-build.log","log_group_name":"${log_group}","log_stream_name":"{instance_id}"},
+  {"file_path":"/var/log/cloud-init-output.log","log_group_name":"${log_group}","log_stream_name":"{instance_id}-cloudinit"}
+]}}}}
+CWCFG
+  /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+    -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/terrain.json >/dev/null 2>&1 \
+    || echo "WARNING: cloudwatch agent did not start; logs stay on the box"
+fi
+
+exec > >(tee -a /var/log/terrain-build.log) 2>&1
+echo "=== log shipping armed; beginning terrain build ==="
+
+REGION="${region}"
+R2_PARAM="${r2_param}"
+SMTP_PARAM="${smtp_param}"
+R2_BUCKET="${r2_bucket}"
+R2_ENDPOINT="https://${r2_account_id}.r2.cloudflarestorage.com"
+ARCHIVE_BASE="${archive_base_url}"
+ALERT_TO="${alert_email}"
+ALERT_FROM="${alert_from}"
+SMTP_HOST="${smtp_host}"
+SMTP_PORT="${smtp_port}"
+TOOLS_SHA="${tools_sha}"
+BIN_SHA256="${terrain_bin_sha256}"
+BOOTSTRAP_SHA256="${bootstrap_sha256}"
+TOOLS_BASE="${archive_base_url}/tools/${tools_sha}"
+WORK=/mnt/terrain-work
+OUT="$WORK/out"
+
+# DEAD-MAN SWITCH, ARMED FIRST. Paired with
+# instance_initiated_shutdown_behavior=terminate. MINUTES, not seconds.
+shutdown -h +${max_build_minutes} &
+
+IID=""
+for i in $(seq 1 20); do
+  TOK=$(curl -sf -X PUT http://169.254.169.254/latest/api/token \
+        -H 'X-aws-ec2-metadata-token-ttl-seconds: 300' 2>/dev/null) || TOK=""
+  if [ -n "$TOK" ]; then
+    IID=$(curl -sf -H "X-aws-ec2-metadata-token: $TOK" \
+          http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null) || IID=""
+    [ -n "$IID" ] && { echo "IMDS answered after $((i*2))s: $IID"; break; }
+  fi
+  sleep 2
+done
+if [ -z "$IID" ]; then
+  echo "FATAL: IMDS never returned an instance id after 40s"
+  exit 1
+fi
+
+# THE GENERATION CARRIES THE TREE, AND THE DATE IS WHAT KEEPS THE KEY IMMUTABLE.
+# The sha is the whole point -- it records which rustdar tree produced the
+# binary that produced these tiles. The date is there because re-running the
+# same tree must not overwrite a key somebody is already reading; a corrupt
+# archive on a live path is the worst version of silent partial success.
+GEN="$TOOLS_SHA-$(date -u +%Y%m%d)"
+PREFIX="terrain/$GEN"
+SMOKE="${smoke_filter}"
+
+# THE SMOKE PATH, and it exists because the user-data is GZIPPED (see
+# terrain.tf): a wrong compression assumption is a box that boots, runs nothing,
+# and produces no log stream at all. A smoke run exercises the whole path --
+# gzip, stripe, sha check, toolchain, GDAL, publish, verify, mail -- against one
+# region in minutes instead of finding out hours in, or not at all.
+#
+# ONLY_CHUNK and ONLY_SUPERCELL are substring filters on the cell name and the
+# two passes filter independently, so both get the same string. The output is a
+# PARTIAL archive by construction, so it publishes under its own prefix and
+# WRITES NO STATUS OBJECT. A smoke run that quietly became the published
+# generation is exactly the silent-partial-success failure this stack keeps
+# finding.
+if [ -n "$SMOKE" ]; then
+  export ONLY_CHUNK="$SMOKE" ONLY_SUPERCELL="$SMOKE"
+  PREFIX="terrain/smoke-$GEN"
+  echo "SMOKE RUN: filter '$SMOKE'; publishing to $PREFIX and writing no status object"
+fi
+
+STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+echo "=== terrain $GEN on $IID, started $STARTED ==="
+
+# Retry GetParameter ITSELF, not `sts get-caller-identity`. See build.sh.tftpl.
+ssm_get() {
+  local n="$1" v="" i
+  for i in $(seq 1 40); do
+    if v=$(aws ssm get-parameter --region "$REGION" --name "$n" \
+             --with-decryption --query Parameter.Value --output text 2>/dev/null); then
+      if [ -n "$v" ] && [ "$v" != "None" ]; then
+        echo "read $n after $((i*3))s" >&2
+        printf '%s' "$v"
+        return 0
+      fi
+    fi
+    sleep 3
+  done
+  echo "FATAL: could not read $n after 120s" >&2
+  return 1
+}
+
+# BOTH parameters first, and the R2 keys are NEVER exported: the SDK prefers
+# environment credentials, so exporting Cloudflare keys makes the next AWS call
+# authenticate with them. Cost an OSM build 2026-08-28.
+CREDS=$(ssm_get "$R2_PARAM")
+SMTP_KEY=$(ssm_get "$SMTP_PARAM")
+R2_KEY_ID=$(python3 -c 'import json,sys;print(json.load(sys.stdin)["access_key_id"])' <<<"$CREDS")
+R2_SECRET=$(python3 -c 'import json,sys;print(json.load(sys.stdin)["secret_access_key"])' <<<"$CREDS")
+unset CREDS
+
+r2() {
+  AWS_ACCESS_KEY_ID="$R2_KEY_ID" AWS_SECRET_ACCESS_KEY="$R2_SECRET" \
+  AWS_DEFAULT_REGION=auto aws s3 "$@" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+}
+
+# ASSERT, do not assume: an empty parameter exits 0 and then SHADOWS the
+# instance profile, surfacing hours later at the upload.
+for v in R2_KEY_ID R2_SECRET SMTP_KEY; do
+  if [ -z "$${!v}" ]; then
+    echo "FATAL: $v is empty after reading SSM. Check the parameter and the instance role."
+    shutdown -h now
+    exit 1
+  fi
+done
+echo "credentials loaded: R2 key id ends ...$${R2_KEY_ID: -4}, smtp key $${#SMTP_KEY} chars"
+
+notify() { # subject, body
+  python3 - "$1" "$2" <<'PY' || echo "WARNING: mail failed, continuing"
+import os, smtplib, ssl, sys
+from email.message import EmailMessage
+m = EmailMessage()
+m["Subject"], m["From"], m["To"] = sys.argv[1], os.environ["ALERT_FROM"], os.environ["ALERT_TO"]
+m.set_content(sys.argv[2])
+# timeout=30 IS LOAD-BEARING: a relay that accepts the connection and then
+# stalls hangs the script forever, past its own terminate-instances.
+with smtplib.SMTP_SSL(os.environ["SMTP_HOST"], int(os.environ["SMTP_PORT"]), timeout=30, context=ssl.create_default_context()) as s:
+    s.login("squallar", os.environ["SMTP_KEY"]); s.send_message(m)
+PY
+}
+export SMTP_HOST SMTP_PORT SMTP_KEY ALERT_TO ALERT_FROM
+
+# FAILURE IS REPORTED, AND THEN THE BOX STILL DIES.
+# The tail is bounded at 80 lines ON PURPOSE. Nothing here ever aggregates a
+# large file into a mail body -- a zcat|awk over a 3.34 GB layerstats wedged the
+# OSM job after it had already published.
+fail() {
+  echo "FAILED at line $1"
+  notify "squallar terrain $GEN FAILED" "$(printf 'Instance %s\nStarted %s\nFailed at line %s\n\n--- last 80 lines ---\n%s\n' "$IID" "$STARTED" "$1" "$(tail -80 /var/log/terrain-build.log)")"
+  aws ec2 terminate-instances --region "$REGION" --instance-ids "$IID" || shutdown -h now
+  exit 1
+}
+trap - EXIT
+trap 'fail $LINENO' ERR
+set -e
+
+# EVERY GUARD BELOW THIS LINE ENDS IN `false`, NOT `exit 1`, AND THE DIFFERENCE
+# IS WHETHER ANYONE HEARS ABOUT IT. `exit` does not fire the ERR trap, so a
+# guard that exits directly skips fail(): no mail, no terminate, and the box
+# sits until the dead-man switch reaps it -- reporting nothing about a
+# verification that caught exactly what it was written to catch. `false` fires
+# ERR, which mails the last 80 lines and terminates.
+
+# --- $WORK on a stripe of ALL instance-store NVMe, never EBS, never one disk ---
+# The terrain job needs far more room than OSM and the numbers are in
+# tools/squallar-terrain/README.md: the contour pass peaks at ~260 GB, and the
+# raster pass at 2x the archive + ~50 GB, which for the default hillshade/PNG
+# combination is ~780 GB. Taking the first disk instead of striping would leave
+# 1425 of 2850 GB unused on an m6id.12xlarge.
+#
+# bootstrap-al2023.sh REFUSES TO RUN if $WORK does not exist. It deliberately
+# does not create the stripe -- that is this script's job, and the guard there
+# is what turns "built into /" into a fatal at second 30 instead of a full disk
+# six hours in.
+#
+# mdadm BEFORE the striping block, not after. It was once called six lines
+# before it was installed, which failed every multi-volume launch and passed
+# single-volume ones -- an intermittent that depended on which pool won.
+dnf install -y mdadm >/dev/null
+DISKS=$(lsblk -dnp -o NAME,MODEL | grep -i "instance storage" | awk '{print $1}')
+COUNT=$(wc -w <<<"$DISKS")
+[ "$COUNT" -ge 1 ] || { echo "FATAL: no instance store found"; false; }
+if [ "$COUNT" -eq 1 ]; then
+  DEV="$DISKS"
+  echo "one instance-store volume: $DEV"
+else
+  echo "striping $COUNT instance-store volumes: $DISKS"
+  mdadm --create /dev/md0 --level=0 --raid-devices="$COUNT" --run $DISKS
+  DEV=/dev/md0
+fi
+mkfs.xfs -f "$DEV"; mkdir -p "$WORK"; mount "$DEV" "$WORK"
+df -h "$WORK"
+
+# --- tools, fetched from the SAME immutable prefix the sha names ---
+# Both objects are public on the archive origin, so this needs no credentials
+# and no NAT. Fetching rather than inlining is what keeps the rendered
+# user-data inside EC2's 16384 base64-byte cap; inlining the 4,624-byte
+# bootstrap would add ~6.2 KB of base64 and blow it.
+cd "$WORK"
+curl -fSL --retry 5 -o bootstrap.sh "$TOOLS_BASE/bootstrap-al2023.sh"
+
+# VERIFY BEFORE EXECUTING, and verify THE BYTES THAT WILL RUN. A truncated
+# download that runs is worse than one that fails. `curl --retry` covers a
+# dropped connection; it does not cover a short 200 from an origin or a proxy.
+#
+# The bootstrap is what `exec`s the binary, so a corrupted bootstrap is
+# arbitrary root code on a box holding R2 write credentials.
+echo "$BOOTSTRAP_SHA256  bootstrap.sh" | sha256sum -c -
+
+# --- build ---
+# EVERY KNOB squallar-terrain HAS IS AN ENVIRONMENT VARIABLE -- there are no
+# flags -- so anything not exported here is a default, including the two below
+# that are not the binary's own and that nothing else sets.
+#
+# AWS_NO_SIGN_REQUEST=YES IS LOAD-BEARING AND IS A WORKAROUND, NOT A SETTING.
+# copernicus-dem-30m is a public AWS Open Data bucket, but squallar-terrain sets
+# AWS_NO_SIGN_REQUEST only on its `gdalwarp` invocations (src/raster.rs), not on
+# the `gdalbuildvrt` calls that open every COG through /vsis3/. On an instance
+# with a profile, GDAL finds credentials on IMDS and SIGNS those reads with a
+# role that has no s3:GetObject at all -- 403, on a bucket that is world
+# readable. Setting it process-wide covers every GDAL child. Fix belongs
+# upstream in squallar-terrain; delete this line when it lands.
+#
+# AWS_REGION is the DEM bucket's own region (eu-central-1), not this stack's.
+# Every `aws` call in this script passes --region explicitly or sets its own, so
+# nothing else reads it.
+#
+# TMPDIR ON THE STRIPE, AND THIS IS NOT TIDINESS. `pmtiles convert` is spawned
+# with no --tmpdir (src/raster.rs), and go-pmtiles deduplicates through
+# os.MkdirTemp, which honours TMPDIR. Left at /tmp that lands on the AL2023 root
+# EBS volume -- single-digit GB -- while the archive being converted is hundreds.
+# squallar-terrain's own TMP already points at $WORK; TMPDIR is the one every
+# child process reads and nothing sets it. CPL_TMPDIR is GDAL's equivalent.
+export TERRAIN_BIN_URL="$TOOLS_BASE/squallar-terrain"
+export WORK OUT
+export TMPDIR="$WORK/tmp" CPL_TMPDIR="$WORK/tmp"
+mkdir -p "$TMPDIR"
+export RASTER_ENCODING="${raster_encoding}"
+export AWS_NO_SIGN_REQUEST=YES
+export AWS_REGION=eu-central-1
+
+# TERRAIN_NO_RUN SPLITS THE BOOTSTRAP IN TWO, AND THE SPLIT IS THE CHECKSUM.
+# Left alone the bootstrap ends in `exec env WORK=$WORK squallar-terrain build`,
+# so the binary it just downloaded starts before anything can look at it -- and
+# pre-verifying a local copy would prove nothing, because the bootstrap fetches
+# its own. TERRAIN_NO_RUN=1 is its documented "install and stop", which puts the
+# verification between the download and the first instruction executed. It also
+# means the target is an argument here rather than an environment variable read
+# three processes away.
+TERRAIN_NO_RUN=1 bash bootstrap.sh
+echo "$BIN_SHA256  /usr/local/bin/squallar-terrain" | sha256sum -c -
+
+squallar-terrain build "${terrain_target}"
+
+# --- publish ---
+# Reaching this line means the binary exited 0, which it does not do on a
+# partial pass: a pass that lost chunks reports how many and fails rather than
+# joining a partial archive and exiting green.
+shopt -s nullglob
+ARCHIVES=("$OUT"/*.pmtiles)
+[ "$${#ARCHIVES[@]}" -ge 1 ] || { echo "FATAL: no .pmtiles in $OUT"; false; }
+
+# ASSERT THE MAGIC BEFORE PUBLISHING, on every archive, locally.
+# tile-join's write-to-temp-then-rename idiom has produced a SQLite database
+# carrying a .pmtiles name here before -- 6,402,048 bytes where 4,838,849 were
+# expected, and `pmtiles show` printing nothing. The binary asserts this too;
+# asserting again costs one head(1) per file and the two checks are independent.
+JSON=""
+for f in "$${ARCHIVES[@]}"; do
+  M=$(head -c7 "$f" | xxd -p)
+  [ "$M" = "504d54696c6573" ] || { echo "FATAL: $f does not begin with PMTiles magic: $M"; false; }
+  N=$(basename "$f"); B=$(stat -c%s "$f")
+  echo "built $N: $B bytes"
+  r2 cp "$f" "s3://$R2_BUCKET/$PREFIX/$N" --content-type application/octet-stream
+  JSON="$JSON$${JSON:+,}$(printf '{"name":"%s","key":"%s/%s","bytes":%s}' "$N" "$PREFIX" "$N" "$B")"
+done
+
+# --- VERIFY THROUGH THE PUBLIC PATH, not through the writer ---
+# A successful PUT proves none of: servable bytes, working ranges, intact
+# routing. A range request proves all three, and it is what the app does.
+sleep 10
+for f in "$${ARCHIVES[@]}"; do
+  N=$(basename "$f"); B=$(stat -c%s "$f")
+  HDR=$(curl -sf -r 0-126 "$ARCHIVE_BASE/$PREFIX/$N" | xxd -p | head -c 14)
+  [ "$HDR" = "504d54696c6573" ] || { echo "FATAL: published $N does not begin with PMTiles magic: $HDR"; false; }
+  REMOTE=$(curl -sfI "$ARCHIVE_BASE/$PREFIX/$N" | grep -i '^content-length:' | tr -d '\r' | awk '{print $2}')
+  [ "$REMOTE" = "$B" ] || { echo "FATAL: $N size mismatch: local $B remote $REMOTE"; false; }
+  echo "verified $PREFIX/$N through the public path"
+done
+
+# --- THE STATUS OBJECT IS WRITTEN LAST. It is what publishes the generation. ---
+# status/terrain.json, NOT status/latest.json: the heartbeat lambda reads
+# latest.json and alarms when it is older than stale_after_days. Terrain is
+# one-shot and would be "stale" forever by that clock, so it gets its own key
+# and nothing watches it.
+FINISHED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '{"generation":"%s","tools_sha":"%s","prefix":"%s","encoding":"%s","archives":[%s],"started":"%s","completed":"%s"}\n' \
+  "$GEN" "$TOOLS_SHA" "$PREFIX" "$RASTER_ENCODING" "$JSON" "$STARTED" "$FINISHED" > "$WORK/terrain.json"
+if [ -n "$SMOKE" ]; then
+  echo "smoke run: NOT writing status/terrain.json"; cat "$WORK/terrain.json"
+else
+  r2 cp "$WORK/terrain.json" "s3://$R2_BUCKET/status/terrain.json" --content-type application/json --cache-control "max-age=60"
+fi
+
+notify "squallar terrain $GEN published" \
+  "$(printf 'generation %s\ntools sha  %s\nprefix     %s\nencoding   %s\nstarted    %s\ncompleted  %s\ninstance   %s\n\n%s\n' \
+     "$GEN" "$TOOLS_SHA" "$PREFIX" "$RASTER_ENCODING" "$STARTED" "$FINISHED" "$IID" "$JSON")"
+
+echo "=== done, terminating ==="
+aws ec2 terminate-instances --region "$REGION" --instance-ids "$IID"

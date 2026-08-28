@@ -239,3 +239,184 @@ variable "fleet_instance_types" {
     "r6id.8xlarge",  # 32 vCPU, 256 GiB, 1x1900 GB
   ]
 }
+
+# ---------------------------------------------------------------------------
+# The terrain build (terrain.tf). Separate path, separate pools, no schedule.
+# ---------------------------------------------------------------------------
+
+variable "terrain_tools_sha" {
+  description = <<-EOT
+    The rustdar commit whose `tools/squallar-terrain` produced the artefacts at
+    `<archive_base_url>/tools/<sha>/`, and THE REASON THIS IS A VARIABLE RATHER
+    THAN A STRING IN THE SCRIPT.
+
+    It does three jobs at once. It selects which uploaded binary boots. It is
+    the first component of the published generation, so the R2 prefix records
+    which tree produced the tiles. And it makes a new terrain build a one-line
+    diff plus an apply, which is a reviewable act, instead of an operator
+    remembering to pass an environment variable to a `create-fleet`.
+
+    The artefacts at that prefix are IMMUTABLE. Uploading different bytes under
+    an existing sha breaks the checksum guard below, which is the intended
+    outcome.
+  EOT
+  type        = string
+  default     = "1acdbb9e723a"
+}
+
+variable "terrain_bin_sha256" {
+  description = <<-EOT
+    sha256 of `squallar-terrain` at `tools/<terrain_tools_sha>/`, checked on the
+    box BEFORE the binary is executed.
+
+    A TRUNCATED DOWNLOAD THAT RUNS IS WORSE THAN ONE THAT FAILS. `curl --retry`
+    covers a connection that drops; it does not cover a proxy or an origin that
+    returns a short 200. The failure that check prevents is not a crash -- it is
+    a build that completes, publishes, verifies through the public path, and
+    contains the wrong tiles.
+
+    Measured, not recalled: 1,080,872 bytes, static-pie musl.
+  EOT
+  type        = string
+  default     = "0ee917933b7441a86d29dd16540f24eb4bf744073fa1d9005fc80fb7d14ab5e1"
+}
+
+variable "terrain_bootstrap_sha256" {
+  description = <<-EOT
+    sha256 of `bootstrap-al2023.sh` at the same prefix, 4,624 bytes.
+
+    Pinned for the same reason as the binary and not merely for symmetry: the
+    bootstrap is the thing that `exec`s the binary, so a corrupted bootstrap is
+    arbitrary root code on a box holding R2 write credentials.
+  EOT
+  type        = string
+  default     = "7f072ebdc2598b30905a1bf40a7db2cb5f27417fa29314dbab87d5708ed61762"
+}
+
+variable "terrain_raster_encoding" {
+  description = <<-EOT
+    `hillshade` or `terrain-rgb`, and hillshade is v1.
+
+    hillshade is a plain grey image: `gdaldem hillshade` and nothing else, and
+    the archive is a fraction of the size. terrain-rgb packs elevation into RGB
+    as a base-256 positional number, which squallar-terrain must store
+    losslessly -- it refuses any non-PNG tile format -- and which lands at
+    roughly 1.75 TB of peak intermediates instead of ~780 GB.
+
+    DO NOT SET THIS TO terrain-rgb WITHOUT ALSO REVISITING
+    `terrain_fleet_instance_types`: 1.75 TB fits m6id.12xlarge's 2,850 GB
+    without much room, and squallar-terrain's own README says to prefer
+    c6id.24xlarge for it.
+  EOT
+  type        = string
+  default     = "hillshade"
+}
+
+variable "terrain_target" {
+  description = <<-EOT
+    `all`, `contours` or `raster` -- the argument to `squallar-terrain build`.
+
+    `all` runs the contour pass and then the raster pass in one job, which is
+    the point of the design: both derive from the same ~1.5 TB of COGs and the
+    read is the slow part. Split it only to re-run a pass that failed after the
+    other one succeeded, and remember that a partial `OUT` publishes a partial
+    generation -- the script uploads whatever `.pmtiles` it finds.
+  EOT
+  type        = string
+  default     = "all"
+}
+
+variable "terrain_smoke_filter" {
+  description = <<-EOT
+    EMPTY FOR A REAL BUILD. A substring of a cell name (e.g. `N39W106`) turns
+    the launch into a smoke run: it is passed as both `ONLY_CHUNK` and
+    `ONLY_SUPERCELL`, publishes under `terrain/smoke-<gen>/`, and writes NO
+    status object.
+
+    IT EXISTS BECAUSE THE USER-DATA IS GZIPPED. cloud-init decompresses
+    gzipped user-data natively, but that path has not been executed here, and
+    if the assumption is wrong the symptom is a box that boots, runs nothing,
+    and leaves no log stream to explain itself. A smoke run buys certainty
+    about the whole path -- compression, stripe, checksum, toolchain, GDAL,
+    publish, public-path verify, mail -- for minutes of a spot instance rather
+    than by discovering it hours into a real run.
+
+    It is also the cheapest way to re-prove the path after a tools bump.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "terrain_max_build_minutes" {
+  description = <<-EOT
+    Dead-man switch for the terrain build. MINUTES. 1440 is twenty-four hours.
+
+    THIS NUMBER IS A BOUND, NOT AN ESTIMATE, AND THE DISTINCTION IS THE POINT.
+    `max_build_minutes` for the OSM build is 2.4x a published benchmark. There
+    is no equivalent here: squallar-terrain's README documents disk and memory
+    in detail and gives NO wall-clock figure for any pass, and nothing has run
+    this globally. Inventing a multiple of a number that does not exist would
+    read like an estimate.
+
+    So it is sized from the asymmetry instead:
+
+      too TIGHT -> kills a working build with no resume. Both passes checkpoint
+                   (a finished chunk is skipped, a super-cell drops a `.done`),
+                   but that state lives on the instance store and dies with the
+                   box, so a reaped run restarts from nothing.
+      too LOOSE -> the hourly rate on a box that is already wedged: ~$1.60/hr on
+                   c6id.24xlarge spot, ~$4.84 on-demand.
+
+    24h of a wedged spot box is ~$38 and of an on-demand box ~$116. That is the
+    real cost of this default, and it is accepted only because it is paid once.
+
+    TIGHTEN THIS FROM THE FIRST RUN. The first completed build produces the only
+    number that matters, and the mail it sends carries `started` and `completed`.
+  EOT
+  type        = number
+  default     = 1440
+}
+
+variable "terrain_fleet_instance_types" {
+  description = <<-EOT
+    The pools the terrain fleet may draw from. A SEPARATE LIST FROM
+    `fleet_instance_types` BECAUSE THE BINDING CONSTRAINT IS A DIFFERENT ONE.
+
+    The OSM list is chosen for RAM: planetiler wants a 29 GB heap plus ~114 GB
+    of memory-mapped cache, so 128 GiB is its floor and the largest SINGLE
+    instance-store volume is what matters. Terrain has no such memory wall --
+    GDAL, tippecanoe and go-pmtiles all stream -- and is bounded by DISK and by
+    CORES, against a STRIPE of every instance-store volume rather than one of
+    them.
+
+    The disk figures come from squallar-terrain's README:
+
+      contour pass                  ~260 GB peak
+      raster, hillshade PNG         ~780 GB peak  (2 x archive + ~50 GB)
+      raster, hillshade WebP        ~250 GB peak
+      raster, terrain-RGB PNG       ~1.75 TB peak
+
+    RASTER_TILE_FORMAT DEFAULTS TO PNG, NOT WEBP, so the default job is the
+    ~780 GB row and not the ~250 GB one. Every type below clears that striped.
+
+    Cores matter because `JOBS` defaults to `nproc` and both passes are
+    embarrassingly parallel over cells. The 32-vCPU members of the OSM list
+    (`m6id.8xlarge`, `r6id.8xlarge`) have enough disk at 1x1900 GB and are
+    excluded anyway: a third of the parallelism against an UNMEASURED dead-man
+    switch is the combination most likely to be reaped mid-build.
+
+    Ordered largest-disk-first rather than cheapest-first. This runs once.
+
+      1. >= ~800 GB of instance store IN TOTAL, since the script stripes.
+      2. >= 48 vCPU.
+      3. x86_64 -- the AMI filter in build.tf selects an x86_64 image, and the
+         binary at `tools/<sha>/` is an x86_64 musl build.
+  EOT
+  type        = list(string)
+  default = [
+    "c6id.24xlarge", # 96 vCPU, 192 GiB, 4x1425 = 5700 GB
+    "m6id.16xlarge", # 64 vCPU, 256 GiB, 2x1900 = 3800 GB
+    "c6id.16xlarge", # 64 vCPU, 128 GiB, 2x1900 = 3800 GB
+    "m6id.12xlarge", # 48 vCPU, 192 GiB, 2x1425 = 2850 GB
+  ]
+}

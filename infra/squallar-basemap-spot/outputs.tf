@@ -88,3 +88,82 @@ output "spot_pools" {
   description = "How many (instance type, availability zone) pools the fleet may draw from. One was fragile; this is the number that makes 'no spot available' mean a regional shortage."
   value       = length(local.fleet_overrides)
 }
+
+# --- terrain (terrain.tf) --------------------------------------------------
+
+output "terrain_log_group" {
+  description = "Where the terrain build's output lands. Its own group, not a stream in the OSM one: aws logs tail $(terraform output -raw terrain_log_group) --follow"
+  value       = aws_cloudwatch_log_group.terrain.name
+}
+
+output "terrain_status_url" {
+  description = <<-EOT
+    What the terrain build published, written LAST and only after both archives
+    verify through the public path. A SEPARATE KEY FROM `status_url` ON PURPOSE:
+    the heartbeat lambda reads `status/latest.json` and alarms past
+    `stale_after_days`, and a one-shot job would be "stale" forever by that
+    clock. Nothing watches this one.
+
+      curl -s <this> | python3 -m json.tool
+  EOT
+  value       = "${var.archive_base_url}/status/terrain.json"
+}
+
+output "run_now_terrain" {
+  description = <<-EOT
+    The ONLY trigger for the terrain build. There is no schedule -- the DEM is a
+    fixed release, so this runs when `terrain_tools_sha` changes and not on a
+    clock:
+
+      aws ec2 create-fleet --cli-input-json "$(terraform output -raw run_now_terrain)"
+
+    NO CALENDAR-MONTH CHECK APPLIES. The 35-day egress guarantee is about the
+    OSM planet PBF; this job's ~1.5 TB comes from `copernicus-dem-30m`, an AWS
+    Open Data bucket read over a path with no NAT in it, and inbound transfer is
+    free and unmetered.
+
+    SMOKE FIRST IF ANYTHING CHANGED. Set `terrain_smoke_filter`, apply, run this
+    -- the whole path proves itself against one region in minutes. Then clear it
+    and run again.
+  EOT
+  value = jsonencode({
+    Type                        = "instant"
+    TargetCapacitySpecification = { TotalTargetCapacity = 1, DefaultTargetCapacityType = "spot" }
+    SpotOptions                 = { AllocationStrategy = "price-capacity-optimized" }
+    LaunchTemplateConfigs = [{
+      LaunchTemplateSpecification = { LaunchTemplateId = aws_launch_template.terrain.id, Version = "$Latest" }
+      Overrides                   = local.terrain_fleet_overrides
+    }]
+  })
+}
+
+output "run_now_terrain_ondemand" {
+  description = <<-EOT
+    Identical except for `DefaultTargetCapacityType`, and for the terrain build
+    this is a more defensible choice than it is for OSM:
+
+      aws ec2 create-fleet --cli-input-json "$(terraform output -raw run_now_terrain_ondemand)"
+
+    A reclaimed OSM build dies during a free download and is simply re-run. A
+    reclaimed terrain build loses everything it has done. Both passes checkpoint
+    -- a finished contour chunk is skipped, a super-cell drops a `.done` -- but
+    THAT STATE LIVES ON THE INSTANCE STORE AND DIES WITH THE BOX, so resume
+    buys nothing across an interruption. On a job with no measured runtime,
+    paying ~3x to not be interrupted may well be the cheaper number.
+
+    ~$4.84/hr against spot's ~$1.60 on c6id.24xlarge.
+  EOT
+  value = jsonencode({
+    Type                        = "instant"
+    TargetCapacitySpecification = { TotalTargetCapacity = 1, DefaultTargetCapacityType = "on-demand" }
+    LaunchTemplateConfigs = [{
+      LaunchTemplateSpecification = { LaunchTemplateId = aws_launch_template.terrain.id, Version = "$Latest" }
+      Overrides                   = local.terrain_fleet_overrides
+    }]
+  })
+}
+
+output "terrain_pools" {
+  description = "How many (instance type, availability zone) pools the terrain fleet may draw from."
+  value       = length(local.terrain_fleet_overrides)
+}

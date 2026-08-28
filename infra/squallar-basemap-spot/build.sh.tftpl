@@ -166,7 +166,7 @@ dnf install -y mdadm >/dev/null
 # I/O-bound rather than CPU-bound, which `archive` is.
 DISKS=$(lsblk -dnp -o NAME,MODEL | grep -i "instance storage" | awk '{print $1}')
 COUNT=$(wc -w <<<"$DISKS")
-[ "$COUNT" -ge 1 ] || { echo "no instance store found"; exit 1; }
+[ "$COUNT" -ge 1 ] || { echo "no instance store found"; false; }
 if [ "$COUNT" -eq 1 ]; then
   DEV="$DISKS"
   echo "one instance-store volume: $DEV"
@@ -208,9 +208,9 @@ r2 cp "/scratch/$GEN.pmtiles.layerstats.tsv.gz" "s3://$R2_BUCKET/basemap/$GEN.la
 # and that CORS/routing are intact -- none of which a successful PUT proves.
 sleep 10
 HDR=$(curl -sf -r 0-126 "$ARCHIVE_BASE/$KEY" | xxd -p | head -c 14)
-[ "$HDR" = "504d54696c6573" ] || { echo "published archive does not begin with PMTiles magic: $HDR"; exit 1; }
+[ "$HDR" = "504d54696c6573" ] || { echo "published archive does not begin with PMTiles magic: $HDR"; false; }
 REMOTE=$(curl -sfI "$ARCHIVE_BASE/$KEY" | grep -i '^content-length:' | tr -d '\r' | awk '{print $2}')
-[ "$REMOTE" = "$BYTES" ] || { echo "size mismatch: local $BYTES remote $REMOTE"; exit 1; }
+[ "$REMOTE" = "$BYTES" ] || { echo "size mismatch: local $BYTES remote $REMOTE"; false; }
 echo "verified $KEY through the public path"
 
 # --- THE STATUS OBJECT IS WRITTEN LAST. It is what publishes the generation. ---

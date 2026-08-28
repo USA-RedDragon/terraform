@@ -67,7 +67,10 @@ data "aws_iam_policy_document" "instance" {
       "logs:PutLogEvents",
       "logs:DescribeLogStreams",
     ]
-    resources = ["${aws_cloudwatch_log_group.build.arn}:*"]
+    resources = [
+      "${aws_cloudwatch_log_group.build.arn}:*",
+      "${aws_cloudwatch_log_group.terrain.arn}:*",
+    ]
   }
 }
 
