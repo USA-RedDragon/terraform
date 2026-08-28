@@ -350,7 +350,7 @@ done
 FINISHED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 printf '{"generation":"%s","tools_sha":"%s","prefix":"%s","encoding":"%s","archives":[%s],"started":"%s","completed":"%s"}\n' \
   "$GEN" "$TOOLS_SHA" "$PREFIX" "$RASTER_ENCODING" "$JSON" "$STARTED" "$FINISHED" > "$WORK/terrain.json"
-if [ -n "$SMOKE" ]; then
+if [ -n "$SMOKE_CHUNK" ] || [ -n "$SMOKE_SUPERCELL" ]; then
   echo "smoke run: NOT writing status/terrain.json"; cat "$WORK/terrain.json"
 else
   r2 cp "$WORK/terrain.json" "s3://$R2_BUCKET/status/terrain.json" --content-type application/json --cache-control "max-age=60"

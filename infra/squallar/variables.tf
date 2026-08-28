@@ -50,3 +50,18 @@ variable "basemap_cors_origins" {
   type        = list(string)
   default     = ["https://squallar.app"]
 }
+
+variable "basemap_ratelimit_per_minute" {
+  description = <<-EOT
+    Per-IP requests per 60 s on the archive prefixes before a 10 s block.
+
+    Sized COST-FIRST: the value is what one hostile IP may bill, not what a
+    legitimate user might need. 6,000 admits $3.11/day/IP in R2 Class B ops
+    and clears a single-pane flat-out panner (3,240/min) by 1.85x; a two-pane
+    flat-out panner trips it and waits sixty seconds. The full derivation, and
+    why the first draft's 50,000 ($777/month/IP) was backwards, is at the
+    ruleset in basemap_edge.tf.
+  EOT
+  type        = number
+  default     = 6000
+}
