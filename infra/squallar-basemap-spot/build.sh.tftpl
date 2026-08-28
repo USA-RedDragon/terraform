@@ -146,12 +146,29 @@ trap 'fail $LINENO' ERR
 set -e
 
 # --- scratch on instance-store NVMe, never EBS ---
-DISK=$(lsblk -dnp -o NAME,MODEL | grep -i "instance storage" | head -1 | awk '{print $1}')
-[ -n "$DISK" ] || { echo "no instance store found"; exit 1; }
-mkfs.xfs -f "$DISK"; mkdir -p /scratch; mount "$DISK" /scratch
+# STRIPE ALL INSTANCE-STORE VOLUMES, do not take the first.
+#
+# Taking one disk left half the machine's storage unused on every multi-volume
+# type in the fleet -- 1425 of 2850 GB on the m6id.12xlarge this ran on, 1425 of
+# 5700 on a c6id.24xlarge. That is fine for the OSM build (287 GB of features)
+# and NOT fine for the contour job, whose GeoJSON intermediate is 0.28-1.24 TB
+# globally. Striping also roughly doubles throughput on the phases that are
+# I/O-bound rather than CPU-bound, which `archive` is.
+DISKS=$(lsblk -dnp -o NAME,MODEL | grep -i "instance storage" | awk '{print $1}')
+COUNT=$(wc -w <<<"$DISKS")
+[ "$COUNT" -ge 1 ] || { echo "no instance store found"; exit 1; }
+if [ "$COUNT" -eq 1 ]; then
+  DEV="$DISKS"
+  echo "one instance-store volume: $DEV"
+else
+  echo "striping $COUNT instance-store volumes: $DISKS"
+  mdadm --create /dev/md0 --level=0 --raid-devices="$COUNT" --run $DISKS
+  DEV=/dev/md0
+fi
+mkfs.xfs -f "$DEV"; mkdir -p /scratch; mount "$DEV" /scratch
 df -h /scratch
 
-dnf install -y java-21-amazon-corretto-headless >/dev/null
+dnf install -y java-21-amazon-corretto-headless mdadm >/dev/null
 curl -fSL --retry 5 -o /scratch/planetiler.jar \
   "https://github.com/onthegomap/planetiler/releases/download/v$PLANETILER_VERSION/planetiler.jar"
 
