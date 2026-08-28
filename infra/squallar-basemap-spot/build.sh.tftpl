@@ -1,7 +1,12 @@
 #!/bin/bash
 # Planet basemap build. Runs once, publishes, terminates.
 # Rendered from build.sh.tftpl by terraform; do not edit on the box.
-set -euo pipefail
+# -E (errtrace) IS LOAD-BEARING, NOT DECORATION. Without it an ERR trap is NOT
+# inherited by shell functions, so a failure inside r2() -- which is every
+# upload -- kills the script while fail() never runs: no mail, no terminate,
+# the box left for the dead-man switch reporting nothing. Verified: `set -euo`
+# exits 1 with the handler silent; `set -Eeuo` runs the handler.
+set -Eeuo pipefail
 
 # Early bailout: fail() cannot exist until the SMTP key is read, and plenty can
 # break before that. Sleeps so CloudWatch flushes before the box dies.
@@ -148,7 +153,7 @@ fail() {
 }
 trap - EXIT          # the early bailout trap has done its job
 trap 'fail $LINENO' ERR
-set -e
+set -eE
 
 # mdadm BEFORE the striping block, not with the Java install below it: `mdadm`
 # was called six lines before it was installed, which failed every multi-volume

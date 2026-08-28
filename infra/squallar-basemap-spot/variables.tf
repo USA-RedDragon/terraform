@@ -261,7 +261,7 @@ variable "terrain_tools_sha" {
     outcome.
   EOT
   type        = string
-  default     = "1a4ec58c9259"
+  default     = "baccb229ee57"
 }
 
 variable "terrain_bin_sha256" {
@@ -278,7 +278,7 @@ variable "terrain_bin_sha256" {
     Measured, not recalled: 1,080,872 bytes, static-pie musl.
   EOT
   type        = string
-  default     = "0ee917933b7441a86d29dd16540f24eb4bf744073fa1d9005fc80fb7d14ab5e1"
+  default     = "c48d2a666ce8ea3c21f0a28456ae6fb382b80660f1549d7860f3d36734b7a95a"
 }
 
 variable "terrain_bootstrap_sha256" {
@@ -326,22 +326,28 @@ variable "terrain_target" {
   default     = "all"
 }
 
-variable "terrain_smoke_filter" {
+variable "terrain_smoke_chunk" {
   description = <<-EOT
-    EMPTY FOR A REAL BUILD. A substring of a cell name (e.g. `N39W106`) turns
-    the launch into a smoke run: it is passed as both `ONLY_CHUNK` and
-    `ONLY_SUPERCELL`, publishes under `terrain/smoke-<gen>/`, and writes NO
-    status object.
+    EMPTY FOR A REAL BUILD. Substring of a CONTOUR chunk name, e.g.
+    `W110_N35` for Colorado N39 W106. Chunks are CHUNK_DEG-degree cells floored
+    to that grid and named longitude-first, so a tile name like `N39W106` matches
+    NOTHING. Get the real name from the tool:
 
-    IT EXISTS BECAUSE THE USER-DATA IS GZIPPED. cloud-init decompresses
-    gzipped user-data natively, but that path has not been executed here, and
-    if the assumption is wrong the symptom is a box that boots, runs nothing,
-    and leaves no log stream to explain itself. A smoke run buys certainty
-    about the whole path -- compression, stripe, checksum, toolchain, GDAL,
-    publish, public-path verify, mail -- for minutes of a spot instance rather
-    than by discovering it hours into a real run.
+      squallar-terrain chunks 5 < tileList.txt
 
-    It is also the cheapest way to re-prove the path after a tools bump.
+    Set with terrain_smoke_supercell -- the two passes name their units
+    differently and one string cannot select the same ground in both.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "terrain_smoke_supercell" {
+  description = <<-EOT
+    EMPTY FOR A REAL BUILD. Substring of a RASTER supercell name, e.g.
+    `sc_z12_000832_001536` for Colorado N39 W106. From:
+
+      squallar-terrain supercells 12 64 < tileList.txt
   EOT
   type        = string
   default     = ""

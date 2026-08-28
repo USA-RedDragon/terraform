@@ -105,7 +105,8 @@ resource "aws_launch_template" "terrain" {
     bootstrap_sha256   = var.terrain_bootstrap_sha256
     raster_encoding    = var.terrain_raster_encoding
     terrain_target     = var.terrain_target
-    smoke_filter       = var.terrain_smoke_filter
+    smoke_chunk        = var.terrain_smoke_chunk
+    smoke_supercell    = var.terrain_smoke_supercell
   }))
 
   tags = { Name = "squallar-terrain-build" }

@@ -9,7 +9,12 @@
 # different input (Copernicus GLO-30, not OSM), different toolchain
 # (GDAL/tippecanoe/go-pmtiles, not planetiler), and NO SCHEDULE AT ALL. The DEM
 # does not change, so this is human-triggered exactly when the tools change.
-set -euo pipefail
+# -E (errtrace) IS LOAD-BEARING, NOT DECORATION. Without it an ERR trap is NOT
+# inherited by shell functions, so a failure inside r2() -- which is every
+# upload -- kills the script while fail() never runs: no mail, no terminate,
+# the box left for the dead-man switch reporting nothing. Verified: `set -euo`
+# exits 1 with the handler silent; `set -Eeuo` runs the handler.
+set -Eeuo pipefail
 
 # Early bailout, armed before fail() can exist. See build.sh.tftpl.
 trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "FATAL: exited $rc before the reporting trap was armed"; sleep 45; shutdown -h now; fi' EXIT
@@ -80,7 +85,8 @@ fi
 # archive on a live path is the worst version of silent partial success.
 GEN="$TOOLS_SHA-$(date -u +%Y%m%d)"
 PREFIX="terrain/$GEN"
-SMOKE="${smoke_filter}"
+SMOKE_CHUNK="${smoke_chunk}"
+SMOKE_SUPERCELL="${smoke_supercell}"
 
 # THE SMOKE PATH, and it exists because the user-data is GZIPPED (see
 # terrain.tf): a wrong compression assumption is a box that boots, runs nothing,
@@ -88,16 +94,28 @@ SMOKE="${smoke_filter}"
 # gzip, stripe, sha check, toolchain, GDAL, publish, verify, mail -- against one
 # region in minutes instead of finding out hours in, or not at all.
 #
-# ONLY_CHUNK and ONLY_SUPERCELL are substring filters on the cell name and the
-# two passes filter independently, so both get the same string. The output is a
-# PARTIAL archive by construction, so it publishes under its own prefix and
-# WRITES NO STATUS OBJECT. A smoke run that quietly became the published
-# generation is exactly the silent-partial-success failure this stack keeps
-# finding.
-if [ -n "$SMOKE" ]; then
-  export ONLY_CHUNK="$SMOKE" ONLY_SUPERCELL="$SMOKE"
+# TWO filters, not one, because THE PASSES NAME THEIR UNITS DIFFERENTLY and no
+# single substring selects the same ground in both. Colorado N39 W106 is
+# `chunk_W110_N35` to the contour pass -- a 5-degree cell floored to the CHUNK_DEG
+# grid, longitude first -- and `sc_z12_000832_001536` to the raster pass, a z12
+# supercell. Ask the tool rather than deriving them by hand:
+#
+#   squallar-terrain chunks 5      < tileList.txt
+#   squallar-terrain supercells 12 64 < tileList.txt
+#
+# An earlier version passed one string to both and a `target=all` smoke could
+# not work at all: whichever pass ran first matched zero cells and the build
+# stopped there.
+#
+# The output is a PARTIAL archive by construction, so it publishes under its own
+# prefix and WRITES NO STATUS OBJECT. A smoke run that quietly became the
+# published generation is exactly the silent-partial-success failure this stack
+# keeps finding.
+if [ -n "$SMOKE_CHUNK" ] || [ -n "$SMOKE_SUPERCELL" ]; then
+  [ -n "$SMOKE_CHUNK" ] && export ONLY_CHUNK="$SMOKE_CHUNK"
+  [ -n "$SMOKE_SUPERCELL" ] && export ONLY_SUPERCELL="$SMOKE_SUPERCELL"
   PREFIX="terrain/smoke-$GEN"
-  echo "SMOKE RUN: filter '$SMOKE'; publishing to $PREFIX and writing no status object"
+  echo "SMOKE RUN: chunk '$SMOKE_CHUNK' supercell '$SMOKE_SUPERCELL'; publishing to $PREFIX and writing no status object"
 fi
 
 STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -130,9 +148,20 @@ R2_KEY_ID=$(python3 -c 'import json,sys;print(json.load(sys.stdin)["access_key_i
 R2_SECRET=$(python3 -c 'import json,sys;print(json.load(sys.stdin)["secret_access_key"])' <<<"$CREDS")
 unset CREDS
 
+# AWS_REGION AND AWS_DEFAULT_REGION, both, and the first one is why this broke.
+#
+# The AWS CLI prefers AWS_REGION over AWS_DEFAULT_REGION. Setting only the
+# latter left an ambient AWS_REGION of the DEM bucket's region winning here,
+# and R2 rejects it: "The region name 'eu-central-1' is
+# not valid. Must be one of: wnam, enam, weur, eeur, apac, oc, auto". A 4.9 GB
+# contour archive built for 20 minutes and then could not be published.
+#
+# The wrapper already scopes CREDENTIALS so nothing leaks in or out. Region is
+# the same kind of ambient state and gets the same treatment.
 r2() {
   AWS_ACCESS_KEY_ID="$R2_KEY_ID" AWS_SECRET_ACCESS_KEY="$R2_SECRET" \
-  AWS_DEFAULT_REGION=auto aws s3 "$@" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+  AWS_REGION=auto AWS_DEFAULT_REGION=auto \
+  aws s3 "$@" --endpoint-url "$R2_ENDPOINT" --only-show-errors
 }
 
 # ASSERT, do not assume: an empty parameter exits 0 and then SHADOWS the
@@ -173,7 +202,7 @@ fail() {
 }
 trap - EXIT
 trap 'fail $LINENO' ERR
-set -e
+set -eE
 
 # EVERY GUARD BELOW THIS LINE ENDS IN `false`, NOT `exit 1`, AND THE DIFFERENCE
 # IS WHETHER ANYONE HEARS ABOUT IT. `exit` does not fire the ERR trap, so a
@@ -258,7 +287,11 @@ export TMPDIR="$WORK/tmp" CPL_TMPDIR="$WORK/tmp"
 mkdir -p "$TMPDIR"
 export RASTER_ENCODING="${raster_encoding}"
 export AWS_NO_SIGN_REQUEST=YES
-export AWS_REGION=eu-central-1
+# No AWS_REGION export. squallar-terrain sets it per-child in cmd() (baccb229),
+# so GDAL reaches the DEM bucket's region without it becoming ambient state that
+# follows the upload into R2 and fails it. AWS_NO_SIGN_REQUEST above is left
+# because it is a GDAL config option the AWS CLI ignores; f6210190 also moved it
+# into cmd(), so it is belt-and-braces rather than load-bearing.
 
 # TERRAIN_NO_RUN SPLITS THE BOOTSTRAP IN TWO, AND THE SPLIT IS THE CHECKSUM.
 # Left alone the bootstrap ends in `exec env WORK=$WORK squallar-terrain build`,
