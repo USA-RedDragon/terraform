@@ -191,7 +191,7 @@ variable "schedule_state" {
     Then flip to ENABLED.
   EOT
   type        = string
-  default     = "DISABLED"
+  default     = "ENABLED"
 }
 
 variable "stale_after_days" {
