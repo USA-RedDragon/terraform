@@ -34,21 +34,28 @@ variable "basemap_cors_origins" {
   description = <<-EOT
     Origins allowed to read the basemap archive from a browser.
 
-    Production only by default. R2 matches these exactly -- there is no wildcard
-    form short of `*` -- so a local dev server cannot be covered by a pattern
-    and `*` is not the answer either: it would let any page on the internet
-    stream our egress, and while egress is $0 the Class B operations are not.
+    R2 matches these exactly -- there is no wildcard form short of `*`.
 
-    LOCAL WEB DEVELOPMENT therefore needs its origin added here temporarily.
-    There is no fixed port to pre-authorise: the browser rig picks one per run
-    (`.github/browser-rig/run_tier2.sh` serves on `127.0.0.1:$PORT`), so a
-    hardcoded `http://localhost:8080` would be a guess that works by luck.
+    **The cost argument that used to live here was wrong, and is retracted
+    rather than reworded.** It claimed `*` would let any page stream our
+    egress and bill Class B operations. MEASURED 2026-08-28: CORS is enforced
+    browser-side AFTER delivery -- a hotlinking page's range requests reach
+    the edge and bill Class B ops whether or not its origin is allowed; the
+    header only decides if that page's JS may read the body. Restricting
+    origins buys hotlink FRICTION, nothing more. The list below is that
+    friction, chosen deliberately (decision 2026-08-29).
+
+    `*` -- decided 2026-08-29, forgoing hotlink friction entirely. What it
+    buys: local dev on any port, the browser rig's random per-run ports, and
+    any future preview deploy all draw the basemap with no terraform edit.
+    What it forgoes is only the friction named above; the request cost was
+    identical either way.
 
     Native builds are unaffected -- CORS is a browser mechanism and the desktop
     and mobile HTTP stacks never consult it.
   EOT
   type        = list(string)
-  default     = ["https://squallar.app"]
+  default     = ["*"]
 }
 
 variable "basemap_ratelimit_per_minute" {
