@@ -261,7 +261,7 @@ variable "terrain_tools_sha" {
     outcome.
   EOT
   type        = string
-  default     = "0b32186899e7"
+  default     = "f569762003d5"
 }
 
 variable "terrain_bin_sha256" {
@@ -278,7 +278,7 @@ variable "terrain_bin_sha256" {
     Measured, not recalled: 1,080,872 bytes, static-pie musl.
   EOT
   type        = string
-  default     = "f55ae73e0390607873bf73c46e394dfe05fa9ca4c1f7786c88dcb057d674ceeb"
+  default     = "ed309be2506a13f44b37cd4be6de8406d1c8cfabb588272dcb43fc320ef5f97f"
 }
 
 variable "terrain_bootstrap_sha256" {
