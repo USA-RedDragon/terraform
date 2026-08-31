@@ -13,12 +13,7 @@ output "distribution_domain_name" {
   value       = module.site.distribution_domain_name
 }
 
-output "deploy_role_arn" {
-  description = "Role the rustdar release workflow assumes via GitHub OIDC."
-  value       = aws_iam_role.github_actions.arn
-}
-
 output "site_url" {
-  description = "Public URL of the deployed PWA."
+  description = "Public URL of the tombstone that retired this origin."
   value       = "https://rustdar.mcswain.dev"
 }
