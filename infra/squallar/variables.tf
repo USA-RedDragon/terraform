@@ -1,19 +1,30 @@
 variable "github_repo" {
   description = <<-EOT
-    The `owner/name` the release workflow runs in, used as the GitHub OIDC
-    subject the deploy role trusts.
+    The GitHub OIDC subject the deploy role trusts, as it appears between
+    `repo:` and the trailing `:*`.
+
+    THIS IS THE IMMUTABLE FORM, NOT `owner/name`. GitHub gives repositories
+    created after 2026-07-15 a subject built from numeric ids that no rename can
+    change:
+
+        repo:OWNER@OWNER-ID/REPO@REPO-ID:ref:refs/heads/BRANCH
+
+    This repository was created 2026-08-24, so that is what its tokens carry.
+    Read the live value from Settings -> Actions -> "Default subject claim
+    prefix", or from any failing job's OIDC token -- do not assemble it by hand.
 
     CONFIRM THIS BEFORE THE FIRST APPLY. It is the one value here that fails
     late and confusingly: a wrong subject applies cleanly, and then every deploy
     dies at `configure-aws-credentials` with "Not authorized to perform
     sts:AssumeRoleWithWebIdentity" -- which reads like a broken role, not a
-    typo'd repository name.
-
-    The default assumes the repository keeps its name inside the new org. If it
-    is renamed on the way over -- `squallar/app`, `squallar/radar` -- set this.
+    typo'd repository name. It did exactly that on 2026-08-31: the old
+    `owner/name` form was applied and the cutover deploy died twelve retries
+    deep. Note that `StringLike` is case-sensitive, so `squallar/squallar`
+    would have missed on the owner's capital S even in the legacy format --
+    two independent reasons for the same silent failure.
   EOT
   type        = string
-  default     = "squallar/squallar"
+  default     = "Squallar@320083733/squallar@1344589140"
 }
 
 variable "basemap_domain" {

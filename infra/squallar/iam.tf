@@ -20,14 +20,18 @@ data "aws_iam_policy_document" "github_actions_assume" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Scoped to the one repository. To narrow further to the branch that
-    # actually deploys, replace the wildcard with
+    # Scoped to the one repository, by the numeric ids GitHub bakes into the
+    # subject for repositories created after 2026-07-15 -- see `github_repo`.
+    # The wildcard covers the ref suffix; to narrow further to the branch that
+    # actually deploys, replace it with
     # "repo:${var.github_repo}:ref:refs/heads/main".
     #
-    # NOT widened to `repo:squallar/*`. That would spare us knowing the
-    # repository name, at the cost of letting any repo in the org -- including
+    # NOT widened to `repo:Squallar@320083733/*`. That would spare us knowing
+    # the repository id, at the cost of letting any repo in the org -- including
     # one that does not exist yet, and including a fork someone pushes into it
     # -- deploy over the production site.
+    #
+    # `StringLike` is case-sensitive. The owner is `Squallar`, capital S.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
