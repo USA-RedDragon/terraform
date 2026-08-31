@@ -20,20 +20,29 @@ data "aws_iam_policy_document" "github_actions_assume" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Scoped to the one repository. To narrow further to the branch that
-    # actually deploys, replace the wildcard with
-    # "repo:USA-RedDragon/rustdar:ref:refs/heads/main".
+    # THE REPOSITORY MOVED, SO THIS SUBJECT DID TOO (2026-08-31).
+    #
+    # `USA-RedDragon/rustdar` is now `Squallar/squallar`, and because that
+    # repository was created after GitHub's 2026-07-15 cutoff its tokens carry
+    # the immutable subject -- numeric owner and repository ids that no future
+    # rename can invalidate. Read from Settings -> Actions -> "Default subject
+    # claim prefix"; do not assemble it by hand.
+    #
+    # This stack no longer deploys the app. Its one remaining job is
+    # `deploy-tombstone` in the new repository's build.yaml, which publishes the
+    # redirect that retires rustdar.mcswain.dev -- and that job could not
+    # authenticate until this changed. Everything else here is inert.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:USA-RedDragon/rustdar:*"]
+      values   = ["repo:Squallar@320083733/squallar@1344589140:*"]
     }
   }
 }
 
 resource "aws_iam_role" "github_actions" {
   name               = "github-actions-rustdar"
-  description        = "Deploy role for USA-RedDragon/rustdar -> rustdar.mcswain.dev"
+  description        = "Tombstone-only role for Squallar/squallar -> rustdar.mcswain.dev"
   assume_role_policy = data.aws_iam_policy_document.github_actions_assume.json
   tags               = { Name = "github-actions-rustdar" }
 }
