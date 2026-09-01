@@ -1,3 +1,3 @@
 module github.com/USA-RedDragon/terraform
 
-go 1.27.0
+go 1.27.1
