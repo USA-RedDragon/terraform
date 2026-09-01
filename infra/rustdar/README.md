@@ -51,7 +51,6 @@ breaking either one fails quietly rather than loudly.
 
 | Name | Version |
 | ---- | ------- |
-| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.62.0 |
 | <a name="provider_cloudflare"></a> [cloudflare](#provider\_cloudflare) | 5.24.0 |
 
 ## Modules
@@ -64,11 +63,6 @@ breaking either one fails quietly rather than loudly.
 
 | Name | Type |
 | ---- | ---- |
-| [aws_iam_role.github_actions](https://registry.terraform.io/providers/hashicorp/aws/6.62.0/docs/resources/iam_role) | resource |
-| [aws_iam_role_policy.github_actions](https://registry.terraform.io/providers/hashicorp/aws/6.62.0/docs/resources/iam_role_policy) | resource |
-| [aws_iam_openid_connect_provider.github](https://registry.terraform.io/providers/hashicorp/aws/6.62.0/docs/data-sources/iam_openid_connect_provider) | data source |
-| [aws_iam_policy_document.github_actions_assume](https://registry.terraform.io/providers/hashicorp/aws/6.62.0/docs/data-sources/iam_policy_document) | data source |
-| [aws_iam_policy_document.github_actions_deploy](https://registry.terraform.io/providers/hashicorp/aws/6.62.0/docs/data-sources/iam_policy_document) | data source |
 | [cloudflare_zone.mcswain_dev](https://registry.terraform.io/providers/cloudflare/cloudflare/5.24.0/docs/data-sources/zone) | data source |
 
 ## Inputs
@@ -80,8 +74,7 @@ No inputs.
 | Name | Description |
 | ---- | ----------- |
 | <a name="output_bucket_name"></a> [bucket\_name](#output\_bucket\_name) | Origin bucket; the deploy step's `aws s3 sync` target. |
-| <a name="output_deploy_role_arn"></a> [deploy\_role\_arn](#output\_deploy\_role\_arn) | Role the rustdar release workflow assumes via GitHub OIDC. |
 | <a name="output_distribution_domain_name"></a> [distribution\_domain\_name](#output\_distribution\_domain\_name) | CloudFront domain name the rustdar CNAME points at. |
 | <a name="output_distribution_id"></a> [distribution\_id](#output\_distribution\_id) | CloudFront distribution id; the deploy step's `aws cloudfront create-invalidation --distribution-id`. |
-| <a name="output_site_url"></a> [site\_url](#output\_site\_url) | Public URL of the deployed PWA. |
+| <a name="output_site_url"></a> [site\_url](#output\_site\_url) | Public URL of the tombstone that retired this origin. |
 <!-- END OF PRE-COMMIT-TERRAFORM DOCS HOOK -->
