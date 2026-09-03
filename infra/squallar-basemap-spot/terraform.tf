@@ -2,7 +2,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "6.62.0"
+      version = "6.63.0"
     }
     # Only to zip the heartbeat function. Pinned like everything else rather
     # than left to float, because an unpinned provider is one more input that
