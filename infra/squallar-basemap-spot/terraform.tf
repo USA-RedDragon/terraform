@@ -9,7 +9,7 @@ terraform {
     # can change the deployed artifact without a commit here.
     archive = {
       source  = "hashicorp/archive"
-      version = "2.8.0"
+      version = "2.8.1"
     }
   }
 
