@@ -45,13 +45,13 @@ breaking either one fails quietly rather than loudly.
 | Name | Version |
 | ---- | ------- |
 | <a name="requirement_aws"></a> [aws](#requirement\_aws) | 6.64.0 |
-| <a name="requirement_cloudflare"></a> [cloudflare](#requirement\_cloudflare) | 5.24.0 |
+| <a name="requirement_cloudflare"></a> [cloudflare](#requirement\_cloudflare) | 5.25.0 |
 
 ## Providers
 
 | Name | Version |
 | ---- | ------- |
-| <a name="provider_cloudflare"></a> [cloudflare](#provider\_cloudflare) | 5.24.0 |
+| <a name="provider_cloudflare"></a> [cloudflare](#provider\_cloudflare) | 5.25.0 |
 
 ## Modules
 
@@ -63,7 +63,7 @@ breaking either one fails quietly rather than loudly.
 
 | Name | Type |
 | ---- | ---- |
-| [cloudflare_zone.mcswain_dev](https://registry.terraform.io/providers/cloudflare/cloudflare/5.24.0/docs/data-sources/zone) | data source |
+| [cloudflare_zone.mcswain_dev](https://registry.terraform.io/providers/cloudflare/cloudflare/5.25.0/docs/data-sources/zone) | data source |
 
 ## Inputs
 
