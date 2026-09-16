@@ -44,7 +44,7 @@ breaking either one fails quietly rather than loudly.
 
 | Name | Version |
 | ---- | ------- |
-| <a name="requirement_aws"></a> [aws](#requirement\_aws) | 6.64.0 |
+| <a name="requirement_aws"></a> [aws](#requirement\_aws) | 6.65.0 |
 | <a name="requirement_cloudflare"></a> [cloudflare](#requirement\_cloudflare) | 5.25.0 |
 
 ## Providers
