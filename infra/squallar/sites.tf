@@ -53,3 +53,19 @@ module "www" {
   cross_origin_isolation = false
   comment                = "squallar.com"
 }
+
+module "docs" {
+  source = "../../modules/static-site"
+
+  providers = {
+    aws           = aws
+    aws.us_east_1 = aws.us_east_1
+    cloudflare    = cloudflare
+  }
+
+  domain_name            = "docs.squallar.com"
+  bucket_name            = "squallar-docs-origin"
+  zone_id                = data.cloudflare_zone.squallar_com.zone_id
+  cross_origin_isolation = false
+  comment                = "docs.squallar.com"
+}

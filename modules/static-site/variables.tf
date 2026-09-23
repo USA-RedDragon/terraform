@@ -1,5 +1,5 @@
 variable "domain_name" {
-  description = "Primary domain. For Squallar this is a zone apex, not a subdomain -- see the CNAME-flattening note in main.tf."
+  description = "Primary domain. The app and the marketing site sit on a zone apex, which relies on the CNAME flattening noted in main.tf; a subdomain such as docs.squallar.com is a plain CNAME."
   type        = string
 }
 

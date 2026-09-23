@@ -40,19 +40,19 @@ data "aws_iam_policy_document" "github_actions_assume" {
   }
 }
 
-# ONE role for both sites, not two. The same workflow in the same repository
+# ONE role for every site, not one each. The same workflow in the same repository
 # publishes both, so a second role would be a second thing to rotate and a
 # second ARN to keep in sync in build.yaml, buying no isolation that the
 # per-resource statements below do not already give.
 resource "aws_iam_role" "github_actions" {
   name               = "github-actions-squallar"
-  description        = "Deploy role for ${var.github_repo} -> squallar.app + squallar.com"
+  description        = "Deploy role for ${var.github_repo} -> squallar.app + squallar.com + docs.squallar.com"
   assume_role_policy = data.aws_iam_policy_document.github_actions_assume.json
   tags               = { Name = "github-actions-squallar" }
 }
 
 data "aws_iam_policy_document" "github_actions_deploy" {
-  # Write both sites. ListBucket is on the buckets themselves, not their
+  # Write every site. ListBucket is on the buckets themselves, not their
   # objects, and is what `aws s3 sync --delete` needs to see which keys are
   # already there.
   statement {
@@ -65,6 +65,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     resources = [
       "${module.app.bucket_arn}/*",
       "${module.www.bucket_arn}/*",
+      "${module.docs.bucket_arn}/*",
     ]
   }
 
@@ -74,6 +75,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     resources = [
       module.app.bucket_arn,
       module.www.bucket_arn,
+      module.docs.bucket_arn,
     ]
   }
 
@@ -86,6 +88,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     resources = [
       module.app.distribution_arn,
       module.www.distribution_arn,
+      module.docs.distribution_arn,
     ]
   }
 }

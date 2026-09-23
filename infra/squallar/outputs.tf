@@ -1,4 +1,4 @@
-# These five are what build.yaml's deploy jobs need. The workflow hardcodes
+# These are what build.yaml's deploy jobs need. The workflow hardcodes
 # them as literals rather than reading state, so after the first apply they have
 # to be copied across by hand -- see README.
 output "deploy_role_arn" {
@@ -26,6 +26,16 @@ output "www_distribution_id" {
   value       = module.www.distribution_id
 }
 
+output "docs_bucket_name" {
+  description = "docs.squallar.com origin bucket; the docs deploy's `aws s3 sync` target."
+  value       = module.docs.bucket_name
+}
+
+output "docs_distribution_id" {
+  description = "docs.squallar.com distribution id; the docs deploy's `create-invalidation --distribution-id`."
+  value       = module.docs.distribution_id
+}
+
 output "app_distribution_domain_name" {
   description = "CloudFront domain the squallar.app apex CNAME is flattened onto."
   value       = module.app.distribution_domain_name
@@ -34,6 +44,11 @@ output "app_distribution_domain_name" {
 output "www_distribution_domain_name" {
   description = "CloudFront domain the squallar.com apex CNAME is flattened onto."
   value       = module.www.distribution_domain_name
+}
+
+output "docs_distribution_domain_name" {
+  description = "CloudFront domain the docs.squallar.com CNAME points at."
+  value       = module.docs.distribution_domain_name
 }
 
 output "basemap_bucket_name" {
