@@ -7,13 +7,13 @@ The IAM role [nexrad-aws-notifier](https://github.com/USA-RedDragon/nexrad-aws-n
 
 | Name | Version |
 | ---- | ------- |
-| <a name="requirement_aws"></a> [aws](#requirement\_aws) | 6.69.1 |
+| <a name="requirement_aws"></a> [aws](#requirement\_aws) | 6.70.0 |
 
 ## Providers
 
 | Name | Version |
 | ---- | ------- |
-| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.69.1 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.70.0 |
 
 ## Modules
 
@@ -23,12 +23,12 @@ No modules.
 
 | Name | Type |
 | ---- | ---- |
-| [aws_iam_role.nexrad_aws_notifier](https://registry.terraform.io/providers/hashicorp/aws/6.69.1/docs/resources/iam_role) | resource |
-| [aws_iam_role_policy.nexrad_aws_notifier](https://registry.terraform.io/providers/hashicorp/aws/6.69.1/docs/resources/iam_role_policy) | resource |
-| [aws_iam_openid_connect_provider.github](https://registry.terraform.io/providers/hashicorp/aws/6.69.1/docs/data-sources/iam_openid_connect_provider) | data source |
-| [aws_iam_openid_connect_provider.k8s](https://registry.terraform.io/providers/hashicorp/aws/6.69.1/docs/data-sources/iam_openid_connect_provider) | data source |
-| [aws_iam_policy_document.assume](https://registry.terraform.io/providers/hashicorp/aws/6.69.1/docs/data-sources/iam_policy_document) | data source |
-| [aws_iam_policy_document.permissions](https://registry.terraform.io/providers/hashicorp/aws/6.69.1/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_role.nexrad_aws_notifier](https://registry.terraform.io/providers/hashicorp/aws/6.70.0/docs/resources/iam_role) | resource |
+| [aws_iam_role_policy.nexrad_aws_notifier](https://registry.terraform.io/providers/hashicorp/aws/6.70.0/docs/resources/iam_role_policy) | resource |
+| [aws_iam_openid_connect_provider.github](https://registry.terraform.io/providers/hashicorp/aws/6.70.0/docs/data-sources/iam_openid_connect_provider) | data source |
+| [aws_iam_openid_connect_provider.k8s](https://registry.terraform.io/providers/hashicorp/aws/6.70.0/docs/data-sources/iam_openid_connect_provider) | data source |
+| [aws_iam_policy_document.assume](https://registry.terraform.io/providers/hashicorp/aws/6.70.0/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.permissions](https://registry.terraform.io/providers/hashicorp/aws/6.70.0/docs/data-sources/iam_policy_document) | data source |
 
 ## Inputs
 
